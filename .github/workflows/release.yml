@@ -71,11 +71,10 @@ jobs:
 
   # ---------------------------------------------------------------------
   # Wails desktop app, one job per target OS (the webview bindings can
-  # only be built on their own platform). Uploaded to the release created
-  # by the goreleaser job above, so it must run after it.
+  # only be built on their own platform). Builds run in parallel with
+  # GoReleaser; publish-desktop uploads them after both jobs complete.
   # ---------------------------------------------------------------------
   desktop:
-    needs: goreleaser
     strategy:
       fail-fast: false
       matrix:
@@ -232,8 +231,25 @@ jobs:
             fi
           done
 
+      - name: Upload desktop artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os }}
+          path: build/bin/vpn-admin*
+          if-no-files-found: error
+
+  publish-desktop:
+    needs: [goreleaser, desktop]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          path: build/bin
+          merge-multiple: true
+
       - name: Upload to GitHub Release
-        shell: bash
+        working-directory: build/bin
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" build/bin/vpn-admin* --clobber
+        run: gh release upload "${{ github.ref_name }}" vpn-admin* --clobber
