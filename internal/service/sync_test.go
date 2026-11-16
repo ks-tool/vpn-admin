@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -569,6 +570,62 @@ func TestSyncServerResendsAllInterfaces(t *testing.T) {
 		if _, ok := fa.get(name); !ok {
 			t.Fatalf("SyncServer did not push interface %q", name)
 		}
+	}
+}
+
+func TestSyncServerDoesNotPruneProviderOnlyPeer(t *testing.T) {
+	svc, server, agent := newTestServerWithAgent(t)
+	agent.mu.Lock()
+	agent.awg = true
+	agent.mu.Unlock()
+	iface, err := svc.CreateInterface(server.ID.String(), awgmodels.InterfaceConfig{
+		Interface: "awg0", Address: "10.0.0.10/24", ListenPort: 51820,
+	})
+	if err != nil {
+		t.Fatalf("CreateInterface: %v", err)
+	}
+	peerKey, err := awgmodels.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey := peerKey.PublicKey()
+	iface.Peers = []awgmodels.InterfacePeer{{
+		Key: publicKey, AllowedIPs: []string{"10.0.0.2/32"},
+	}}
+	if err := svc.store.Servers().Interfaces(server.ID).Set(iface); err != nil {
+		t.Fatal(err)
+	}
+	peerResource := models.Resource{
+		ID: publicKey.String(), ServerID: server.ID.String(), APIVersion: "awg.ks-tool.dev/v1",
+		Kind: "Peer", Name: "provider-only", Generation: 1,
+		Spec: json.RawMessage(fmt.Sprintf(`{"name":"provider-only","interfaceRef":%q,"publicKey":%q,"allowedIPs":["10.0.0.2/32"]}`, iface.ID.String(), publicKey.String())),
+	}
+	if err := svc.store.Resources(server.ID).Set(&peerResource); err != nil {
+		t.Fatal(err)
+	}
+	agent.mu.Lock()
+	agent.resources["Peer/"+peerResource.Name] = peerResource
+	agent.mu.Unlock()
+
+	if err := svc.SyncServer(server.ID.String()); err != nil {
+		t.Fatalf("SyncServer: %v", err)
+	}
+
+	agent.mu.Lock()
+	_, remoteExists := agent.resources["Peer/"+peerResource.Name]
+	agent.mu.Unlock()
+	if !remoteExists {
+		t.Fatal("SyncServer deleted a provider peer missing from the legacy user model")
+	}
+	if _, err := svc.store.Resources(server.ID).Get(peerResource.ID); err != nil {
+		t.Fatalf("provider peer disappeared from local resources: %v", err)
+	}
+	stored, err := svc.store.Servers().Interfaces(server.ID).Get(iface.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Peers) != 1 || stored.Peers[0].Key != publicKey {
+		t.Fatalf("interface peer changed during sync: %+v", stored.Peers)
 	}
 }
 

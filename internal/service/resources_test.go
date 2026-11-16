@@ -563,7 +563,7 @@ func TestGenericLegacyMutationsUseResourceProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	iface.Interface = "renamed"
-	handled, err := svc.pushProviderInterface(server.ID, iface)
+	handled, err := svc.pushProviderInterface(server.ID, iface, true)
 	if err != nil || !handled {
 		t.Fatalf("pushProviderInterface: handled=%v, %v", handled, err)
 	}

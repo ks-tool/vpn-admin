@@ -41,7 +41,15 @@ func (s *Service) pushInterface(serverID uuid.UUID, iface *models.Interface) {
 }
 
 func (s *Service) pushInterfaceWithFirewall(serverID uuid.UUID, iface *models.Interface, syncFirewall bool) {
-	if handled, err := s.pushProviderInterface(serverID, iface); handled {
+	s.pushInterfaceWithProviderPrune(serverID, iface, syncFirewall, true)
+}
+
+func (s *Service) syncInterfaceWithFirewall(serverID uuid.UUID, iface *models.Interface, syncFirewall bool) {
+	s.pushInterfaceWithProviderPrune(serverID, iface, syncFirewall, false)
+}
+
+func (s *Service) pushInterfaceWithProviderPrune(serverID uuid.UUID, iface *models.Interface, syncFirewall, pruneProviderPeers bool) {
+	if handled, err := s.pushProviderInterface(serverID, iface, pruneProviderPeers); handled {
 		s.recordSyncResult(serverID, iface, err)
 		if err == nil && syncFirewall {
 			s.scheduleFirewallSync(serverID)
@@ -125,7 +133,7 @@ func (s *Service) syncServer(serverID string, syncFirewall bool) error {
 	}
 
 	for i := range ifaces {
-		s.pushInterfaceWithFirewall(sID, &ifaces[i], syncFirewall)
+		s.syncInterfaceWithFirewall(sID, &ifaces[i], syncFirewall)
 	}
 
 	s.syncMonitoringState(sID)
