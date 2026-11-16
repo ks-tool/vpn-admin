@@ -455,8 +455,9 @@ func (s *Service) migratedAllowedIPs(current []string, network *net.IPNet, used 
 }
 
 // interfaceUsage loads the interface owning ifaceID and returns its subnet along
-// with the set of host IPs already taken on it — the interface's own address and
-// every existing peer's AllowedIPs. Shared by nextFreeIP (auto-assign a free
+// with the set of host IPs already taken or reserved on it — the interface's own
+// address, every existing peer's AllowedIPs, and the conventional gateway address
+// when a default-route peer is present. Shared by nextFreeIP (auto-assign a free
 // address) and validatePeerAllowedIPs (validate an explicit one). The interface's
 // own host address is included in the used set, so a peer is never handed (or
 // allowed to claim) the IP the interface itself uses.
@@ -497,18 +498,39 @@ func (s *Service) interfaceUsage(ifaceID uuid.UUID) (*net.IPNet, map[string]bool
 }
 
 // addInterfaceIPs records an interface's own address and every host IP its peers
-// use into used, for free-IP allocation and collision checks.
+// use into used, for free-IP allocation and collision checks. A default-route
+// peer also reserves the subnet's first host address for the gateway, even when
+// that gateway has no explicit host AllowedIPs entry.
 func addInterfaceIPs(used map[string]bool, iface *models.Interface) {
-	if ip, _, e := net.ParseCIDR(iface.Address); e == nil {
+	ip, network, err := net.ParseCIDR(iface.Address)
+	if err == nil {
 		used[ip.String()] = true
 	}
+	hasDefaultRoute := false
 	for _, peer := range iface.Peers {
 		for _, cidr := range peer.AllowedIPs {
 			if ip, _ := parseAllowedIP(cidr); ip != nil {
 				used[ip.String()] = true
 			}
+			if _, route, e := net.ParseCIDR(cidr); e == nil {
+				if ones, _ := route.Mask.Size(); ones == 0 {
+					hasDefaultRoute = true
+				}
+			}
 		}
 	}
+	if err == nil && hasDefaultRoute {
+		used[firstHostIP(network).String()] = true
+	}
+}
+
+func firstHostIP(network *net.IPNet) net.IP {
+	ip := cloneIP(network.IP.Mask(network.Mask))
+	ones, bits := network.Mask.Size()
+	if bits-ones >= 2 {
+		incIP(ip)
+	}
+	return ip
 }
 
 // parseAllowedIP parses an AllowedIPs entry, returning its address and whether
