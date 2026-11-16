@@ -256,7 +256,6 @@
     "noArtifactTags": "No published versions found",
     "noProvidersFound": "No providers found",
     "installedProviders": "Installed providers",
-    "installedAgentVersion": "Installed agent version",
     "noInstalledProviders": "No providers installed, or the agent is unavailable",
     "addProvider": "Add",
     "addProviderTitle": "Install provider",

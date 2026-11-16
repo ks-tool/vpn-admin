@@ -256,7 +256,6 @@
     "noArtifactTags": "Опубликованные версии не найдены",
     "noProvidersFound": "Провайдеры не найдены",
     "installedProviders": "Установленные провайдеры",
-    "installedAgentVersion": "Версия установленного агента",
     "noInstalledProviders": "Провайдеры не установлены или агент недоступен",
     "addProvider": "Добавить",
     "addProviderTitle": "Установка провайдера",

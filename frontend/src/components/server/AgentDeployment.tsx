@@ -187,12 +187,10 @@ export function AgentDeployment({server, onChanged, onBusyChange}: {
 
     return (
         <div className="rounded-xl border border-border bg-card p-6 dark:border-white/5 dark:bg-white/3">
-            <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2 text-lg font-semibold"><Rocket size={20} />{t('servers.deployAgentTitle')}</div>
-                <span className="text-xs text-muted-foreground">{t('servers.installedAgentVersion')}: <span className="font-mono text-foreground">{hostInfo?.version || '—'}</span></span>
-            </div>
+            <div className="mb-1 flex items-center gap-2 text-lg font-semibold"><Rocket size={20} />{t('servers.deployAgentTitle')}</div>
             <p className="mb-5 text-sm text-muted-foreground">{t('servers.agentModal.packDeployHint')}</p>
-            <div className="flex justify-end">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-mono text-xs text-muted-foreground">{hostInfo?.version || '—'}</span>
                 <button type="button" onClick={() => setAddingAgent(true)} disabled={busy} className={cn(buttons.primary, 'inline-flex items-center gap-2')}>
                     <Rocket size={14} />{busy && request?.kind === 'agent' ? t('servers.deploying') : t('servers.deployAgent')}
                 </button>
