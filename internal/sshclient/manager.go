@@ -82,6 +82,15 @@ func (m *Manager) SetPassphrase(serverID uuid.UUID, passphrase string, applyToAl
 	}
 }
 
+// ResetPassphrase forgets the per-server passphrase after its SSH credentials
+// change. The explicit empty entry also prevents a stale global fallback from
+// being applied to the new key; other servers retain their cached passphrases.
+func (m *Manager) ResetPassphrase(serverID uuid.UUID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.passphrases[serverID] = ""
+}
+
 // PassphraseFor returns the cached passphrase for serverID, falling back to
 // the "use for all connections" passphrase (if any) when none was cached
 // specifically for this server.

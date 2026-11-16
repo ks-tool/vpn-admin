@@ -18,7 +18,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -27,7 +26,6 @@ import (
 
 	"github.com/ks-tool/vpn-admin/internal/deploy"
 	"github.com/ks-tool/vpn-admin/internal/pki"
-	"github.com/ks-tool/vpn-admin/internal/sshclient"
 	"github.com/ks-tool/vpn-admin/models"
 	"github.com/ks-tool/vpn-admin/storage"
 
@@ -36,12 +34,10 @@ import (
 
 // ensureTunnel (re)opens the SSH tunnel for srv if it doesn't have mTLS
 // configured, so a server added or edited after StartTunnels ran at process
-// startup still gets one without requiring a restart. The resulting dial
-// error (if any) is both logged and returned: most callers treat it as
-// best-effort and ignore it (the server record itself was already saved
-// successfully), but UpdateServer/UnlockServerSSH specifically check for a
-// *sshclient.PassphraseRequiredError to prompt the user instead of letting
-// it pass silently as a transient connectivity issue.
+// startup still gets one without requiring a restart. The resulting dial error
+// is logged and returned. UpdateServer ignores it because the record was already
+// saved; UnlockServerSSH returns it so the unlock attempt reports whether the
+// supplied passphrase actually opened the tunnel.
 func (s *Service) ensureTunnel(srv *models.Server) error {
 	servers := []models.Server{*srv}
 	errs := s.tunnels.OpenAll(servers)
@@ -240,6 +236,7 @@ func (s *Service) UpdateServer(id string, in ServerInput) (*models.Server, error
 	in.Agent.MonitoringDisabled = srv.Agent.MonitoringDisabled
 	in.Agent.ProfilingEnabled = srv.Agent.ProfilingEnabled
 
+	credentialsChanged := in.SSH.Key != srv.SSH.Key || in.SSH.KeyData != srv.SSH.KeyData || in.SSH.Password != srv.SSH.Password
 	srv.Name = in.Name
 	srv.Info = in.Info
 	srv.SSH = in.SSH
@@ -247,14 +244,15 @@ func (s *Service) UpdateServer(id string, in ServerInput) (*models.Server, error
 	if err = s.store.Servers().Set(srv); err != nil {
 		return nil, err
 	}
-
-	if err = s.ensureTunnel(srv); err != nil {
-		if _, ok := errors.AsType[*sshclient.PassphraseRequiredError](err); ok {
-			return nil, err
-		}
-		// any other dial error (host unreachable, etc.) is already logged by
-		// ensureTunnel and shouldn't block the save that just succeeded.
+	if credentialsChanged {
+		s.tunnels.ResetPassphrase(sID)
 	}
+
+	// The record is already saved. Connectivity is refreshed best-effort and any
+	// failure, including a passphrase required by the new key, is reported through
+	// agent status and the explicit unlock flow rather than turning the update
+	// into a 500 response.
+	_ = s.ensureTunnel(srv)
 	return srv, nil
 }
 
