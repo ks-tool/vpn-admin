@@ -53,6 +53,7 @@ PrivateKey = ` + keyStr(f.ifKey) + `
 Address = 10.8.0.1/24
 ListenPort = 51900
 DNS = 1.1.1.1
+MTU = 1280
 PostUp = iptables -A FORWARD -i %i -j ACCEPT
 PostDown = iptables -D FORWARD -i %i -j ACCEPT
 
@@ -229,9 +230,9 @@ func TestImportInterfaceFromServerCreatesEverythingAndPushes(t *testing.T) {
 			t.Fatalf("GetPeerConfig for %s: %v", u.Name, err)
 		}
 	}
-	// The peer config renders with the imported interface's endpoint port.
+	// The peer config renders with the imported interface's endpoint and MTU.
 	cfgText, _ := svc.GetPeerConfig(alice.ID.String(), pubStr(f.p1))
-	if !strings.Contains(cfgText, "Endpoint = example.invalid:51900") || !strings.Contains(cfgText, "PublicKey = "+pubStr(f.ifKey)) {
+	if !strings.Contains(cfgText, "Endpoint = example.invalid:51900") || !strings.Contains(cfgText, "PublicKey = "+pubStr(f.ifKey)) || !strings.Contains(cfgText, "MTU = 1280") {
 		t.Fatalf("rendered client config:\n%s", cfgText)
 	}
 
