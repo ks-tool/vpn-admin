@@ -17,9 +17,14 @@
 package service
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/pem"
 	"testing"
 
 	"github.com/ks-tool/vpn-admin/models"
+
+	"golang.org/x/crypto/ssh"
 )
 
 // TestUpdateServerSwitchesSSHAuthMethod locks the credential-merge rule in
@@ -103,6 +108,62 @@ func TestUpdateServerSwitchesSSHAuthMethod(t *testing.T) {
 			t.Errorf("port = %d, want 2222", updated.SSH.Port)
 		}
 	})
+}
+
+func TestUpdateServerCredentialsResetPassphraseWithoutFailingSave(t *testing.T) {
+	base := func() models.SSHConfig {
+		return models.SSHConfig{Host: "example.invalid", Port: 22, User: "deploy"}
+	}
+	newKey := encryptedServiceTestKey(t, "new-passphrase")
+	for _, test := range []struct {
+		name   string
+		ssh    models.SSHConfig
+		direct bool
+	}{
+		{name: "keyData", ssh: withKeyData(base(), string(newKey))},
+		{name: "key path", ssh: models.SSHConfig{Host: "example.invalid", Port: 22, User: "deploy", Key: "/new/key"}, direct: true},
+		{name: "password", ssh: withPassword(base(), "new-password"), direct: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			svc := newTestService(t)
+			srv, err := svc.CreateServer(ServerInput{Name: "s", SSH: withKeyData(base(), "OLDKEY")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			svc.tunnels.SetPassphrase(srv.ID, "old-passphrase", true)
+			agent := models.Agent{}
+			if test.direct {
+				agent.TLS = &models.AgentTLS{CA: models.CertKeyPair{Certificate: "direct-connection"}}
+			}
+			updated, err := svc.UpdateServer(srv.ID.String(), ServerInput{Name: "s", SSH: test.ssh, Agent: agent})
+			if err != nil {
+				t.Fatalf("saved credential update returned an error: %v", err)
+			}
+			if got := svc.tunnels.PassphraseFor(srv.ID); len(got) != 0 {
+				t.Fatalf("stale passphrase survived credential update: %q", got)
+			}
+			stored, err := svc.store.Servers().Get(srv.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if updated.SSH != test.ssh || stored.SSH != test.ssh {
+				t.Fatalf("credentials were not saved: response=%+v stored=%+v want=%+v", updated.SSH, stored.SSH, test.ssh)
+			}
+		})
+	}
+}
+
+func encryptedServiceTestKey(t *testing.T, passphrase string) []byte {
+	t.Helper()
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := ssh.MarshalPrivateKeyWithPassphrase(privateKey, "test", []byte(passphrase))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(block)
 }
 
 func withKeyData(c models.SSHConfig, data string) models.SSHConfig {
