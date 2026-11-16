@@ -166,6 +166,54 @@ func TestUpdateInterfaceAllowsUnchangedFieldsDespiteConflict(t *testing.T) {
 	}
 }
 
+func TestNextFreeIPReservesGatewayForExitPeer(t *testing.T) {
+	svc, srv := newValidationTestServer(t)
+	exitIface, err := svc.CreateInterface(srv.ID.String(), awgmodels.InterfaceConfig{
+		Interface: "wg0", Address: "10.0.0.10/24", ListenPort: 51820,
+	})
+	if err != nil {
+		t.Fatalf("CreateInterface exit: %v", err)
+	}
+	regularIface, err := svc.CreateInterface(srv.ID.String(), awgmodels.InterfaceConfig{
+		Interface: "wg1", Address: "10.0.1.10/24", ListenPort: 51821,
+	})
+	if err != nil {
+		t.Fatalf("CreateInterface regular: %v", err)
+	}
+	user, err := svc.CreateUser(UserInput{Name: "u1"})
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	if _, err := svc.AddPeer(user.ID.String(), AddPeerInput{
+		InterfaceID: exitIface.ID,
+		AllowedIPs:  []string{"0.0.0.0/0"},
+	}); err != nil {
+		t.Fatalf("AddPeer(exit gateway): %v", err)
+	}
+	if _, err := svc.AddPeer(user.ID.String(), AddPeerInput{InterfaceID: exitIface.ID}); err != nil {
+		t.Fatalf("AddPeer(auto-assign with exit gateway): %v", err)
+	}
+	if _, err := svc.AddPeer(user.ID.String(), AddPeerInput{InterfaceID: regularIface.ID}); err != nil {
+		t.Fatalf("AddPeer(auto-assign without exit gateway): %v", err)
+	}
+
+	exitStored, err := svc.store.Servers().Interfaces(srv.ID).Get(exitIface.ID)
+	if err != nil {
+		t.Fatalf("Get exit interface: %v", err)
+	}
+	if got := hostPeerIPs(exitStored); len(got) != 1 || got[0] != "10.0.0.2/32" {
+		t.Fatalf("exit interface client IPs = %v, want [10.0.0.2/32] (gateway .1 reserved)", got)
+	}
+	regularStored, err := svc.store.Servers().Interfaces(srv.ID).Get(regularIface.ID)
+	if err != nil {
+		t.Fatalf("Get regular interface: %v", err)
+	}
+	if got := hostPeerIPs(regularStored); len(got) != 1 || got[0] != "10.0.1.1/32" {
+		t.Fatalf("regular interface client IPs = %v, want [10.0.1.1/32]", got)
+	}
+}
+
 // TestNextFreeIPHandlesSlash31 verifies auto-assign works on an RFC 3021
 // point-to-point /31 (both addresses usable, no network/broadcast to skip).
 func TestNextFreeIPHandlesSlash31(t *testing.T) {
