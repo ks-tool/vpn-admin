@@ -246,22 +246,22 @@ func loadKey(cfg models.SSHConfig) (keyData []byte, keySource string, err error)
 	return nil, "", nil
 }
 
-// parseSigner parses keyData, decrypting it with passphrase when non-empty.
-// Any failure once a passphrase was supplied (wrong passphrase, or any other
-// parse error) is reported as *PassphraseRequiredError too, so the caller
-// re-prompts instead of surfacing a raw parse error — from the user's
-// perspective "wrong passphrase" and "passphrase needed" call for the same
-// retry UI.
+// parseSigner parses keyData, first without a passphrase so an unencrypted key
+// works even when another key's cached passphrase is supplied. Any failure once
+// a passphrase was supplied (wrong passphrase, or any other parse error) is
+// reported as *PassphraseRequiredError too, so the caller re-prompts instead of
+// surfacing a raw parse error — from the user's perspective "wrong passphrase"
+// and "passphrase needed" call for the same retry UI.
 func parseSigner(keyData []byte, passphrase string) (ssh.Signer, error) {
-	if len(passphrase) == 0 {
-		signer, err := ssh.ParsePrivateKey(keyData)
-		if err != nil {
-			if _, ok := errors.AsType[*ssh.PassphraseMissingError](err); ok {
-				return nil, &PassphraseRequiredError{Err: err}
-			}
-			return nil, err
-		}
+	signer, plainErr := ssh.ParsePrivateKey(keyData)
+	if plainErr == nil {
 		return signer, nil
+	}
+	if len(passphrase) == 0 {
+		if _, ok := errors.AsType[*ssh.PassphraseMissingError](plainErr); ok {
+			return nil, &PassphraseRequiredError{Err: plainErr}
+		}
+		return nil, plainErr
 	}
 	signer, err := ssh.ParsePrivateKeyWithPassphrase(keyData, []byte(passphrase))
 	if err != nil {
