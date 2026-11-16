@@ -249,7 +249,6 @@ jobs:
           merge-multiple: true
 
       - name: Upload to GitHub Release
-        working-directory: build/bin
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" vpn-admin* --clobber
+        run: gh release upload "${{ github.ref_name }}" build/bin/vpn-admin* --clobber --repo "${{ github.repository }}"
