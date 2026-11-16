@@ -16,7 +16,7 @@
 
 import {useCallback, useEffect, useMemo, useState} from 'react';
 import {useTranslation} from 'react-i18next';
-import {Edit2, Network, Play, Plus, Power, RefreshCw, Trash2} from 'lucide-react';
+import {Edit2, FileInput, Network, Play, Plus, Power, PowerOff, QrCode, RefreshCw, RotateCcw, ShieldOff, Trash2} from 'lucide-react';
 import {toast} from 'sonner';
 import {ConfirmModal} from '@/components/common/ConfirmModal';
 import {FormField} from '@/components/common/FormField';
@@ -214,8 +214,8 @@ export function ResourceManager({serverId, kind = 'Interface', userId, onChanged
                                         {condition?.message && <div className={cn('mt-2 text-xs', condition.status === 'False' ? 'text-red-500' : 'text-muted-foreground')}>{condition.reason}: {condition.message}</div>}
                                     </div>
                                     <div className="flex shrink-0 gap-2">
-                                        {item.definition.actions?.map(actionDefinition => <button key={actionDefinition.name} type="button" disabled={busy} onClick={() => setAction({item, action: actionDefinition})} title={actionDefinition.title} aria-label={actionDefinition.title} className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"><Play size={15} /></button>)}
-                                        {supportsDisabled(item.definition) && <button type="button" disabled={busy} onClick={() => void toggleDisabled(item)} title={disabled ? t('resources.activate') : t('resources.deactivate')} className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"><Power size={16} /></button>}
+                                        {item.definition.actions?.map(actionDefinition => <button key={actionDefinition.name} type="button" disabled={busy} onClick={() => setAction({item, action: actionDefinition})} title={actionDefinition.title} aria-label={actionDefinition.title} className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"><ActionIcon name={actionDefinition.name} /></button>)}
+                                        {supportsDisabled(item.definition) && <button type="button" disabled={busy} onClick={() => void toggleDisabled(item)} title={disabled ? t('resources.activate') : t('resources.deactivate')} className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground">{disabled ? <Power size={16} /> : <PowerOff size={16} />}</button>}
                                         <button type="button" disabled={busy} onClick={() => setEditor({provider: item.provider, kind: item.resource.kind, resource: item.resource})} title={t('common.edit')} className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"><Edit2 size={16} /></button>
                                         <button type="button" disabled={busy} onClick={() => setDeleting(item)} title={t('common.delete')} className="rounded p-1 text-muted-foreground hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-500/10"><Trash2 size={16} /></button>
                                     </div>
@@ -230,6 +230,23 @@ export function ResourceManager({serverId, kind = 'Interface', userId, onChanged
             {deleting && <ConfirmModal title={t('resources.deleteTitle')} message={t('resources.deleteConfirm', {name: deleting.resource.name})} onCancel={() => setDeleting(null)} onConfirm={() => void remove()} loading={busy} />}
         </div>
     );
+}
+
+function ActionIcon({name}: {name: string}) {
+    switch (name) {
+        case 'importSecret':
+            return <FileInput size={15} />;
+        case 'renderClientConfig':
+            return <QrCode size={16} />;
+        case 'rotateKeys':
+            return <RefreshCw size={15} />;
+        case 'revoke':
+            return <ShieldOff size={15} />;
+        case 'restart':
+            return <RotateCcw size={15} />;
+        default:
+            return <Play size={15} />;
+    }
 }
 
 function supportsDisabled(definition: ResourceDefinition): boolean {
