@@ -124,7 +124,7 @@ func (s *Service) legacyTunnelPeer(iface *models.Interface) (awgmodels.Interface
 	return awgmodels.InterfacePeer{}, "", nil, nil
 }
 
-func (s *Service) pushProviderInterface(serverID uuid.UUID, iface *models.Interface) (bool, error) {
+func (s *Service) pushProviderInterface(serverID uuid.UUID, iface *models.Interface, pruneProviderPeers bool) (bool, error) {
 	local, err := s.store.Resources(serverID).Get(iface.ID.String())
 	if err != nil && !storage.IsNotFound(err) {
 		return true, err
@@ -239,6 +239,10 @@ func (s *Service) pushProviderInterface(serverID uuid.UUID, iface *models.Interf
 				}
 			}
 		}
+	}
+	// Re-sync is additive: absence from the legacy user model is not deletion intent.
+	if !pruneProviderPeers {
+		return true, nil
 	}
 	localResources, err := s.localProviderResources(serverID.String())
 	if err != nil {
