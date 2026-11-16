@@ -144,6 +144,19 @@ func splitHostPort(addr string) (string, uint16) {
 	return host, port
 }
 
+func TestManagerResetPassphraseBlocksStaleGlobal(t *testing.T) {
+	m := NewManager()
+	serverID, otherServerID := uuid.New(), uuid.New()
+	m.SetPassphrase(serverID, "secret", true)
+	m.ResetPassphrase(serverID)
+	if got := m.PassphraseFor(serverID); len(got) != 0 {
+		t.Fatalf("reset server passphrase = %q", got)
+	}
+	if got := m.PassphraseFor(otherServerID); got != "secret" {
+		t.Fatalf("other server global passphrase = %q", got)
+	}
+}
+
 func TestManagerEnsureReconnectsAfterDeadConnection(t *testing.T) {
 	srv := newFakeSSHServer(t)
 	cfg := sshCfgFor(srv)
