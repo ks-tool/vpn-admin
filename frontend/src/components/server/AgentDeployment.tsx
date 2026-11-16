@@ -25,10 +25,10 @@ import {SSHPassphraseModal} from '@/components/server/SSHPassphraseModal';
 import {SudoPasswordModal} from '@/components/server/SudoPasswordModal';
 import {deployAgentPack, deployProvider, getDeployStatus, removeProvider, unlockServerSudo} from '@/services/deployment';
 import {getProviderManifest} from '@/services/resources';
-import {unlockServerSSH} from '@/services/servers';
+import {getServerHostInfo, unlockServerSSH} from '@/services/servers';
 import {SSHPassphraseRequiredError, SudoPasswordRequiredError} from '@/services/sshErrors';
 import {cn} from '@/lib/utils';
-import type {AgentDeployment as AgentDeploymentRequest, ProviderDeployment, ProviderManifest, Registry, Server} from '@/types';
+import type {AgentDeployment as AgentDeploymentRequest, HostInfo, ProviderDeployment, ProviderManifest, Registry, Server} from '@/types';
 
 type DeploymentRequest =
     | {kind: 'agent'; deployment: AgentDeploymentRequest}
@@ -46,6 +46,7 @@ export function AgentDeployment({server, onChanged, onBusyChange}: {
 }) {
     const {t} = useTranslation();
     const [manifest, setManifest] = useState<ProviderManifest | null>(null);
+    const [hostInfo, setHostInfo] = useState<HostInfo | null>(null);
     const [addingAgent, setAddingAgent] = useState(false);
     const [addingProvider, setAddingProvider] = useState(false);
     const [removingProvider, setRemovingProvider] = useState<string | null>(null);
@@ -71,10 +72,17 @@ export function AgentDeployment({server, onChanged, onBusyChange}: {
         }
     }, [server.id]);
 
+    const loadHostInfo = useCallback(async () => {
+        setHostInfo(await getServerHostInfo(server.id));
+    }, [server.id]);
+
     useEffect(() => {
-        const timeout = window.setTimeout(() => void loadManifest(), 0);
+        const timeout = window.setTimeout(() => {
+            void loadManifest();
+            void loadHostInfo();
+        }, 0);
         return () => window.clearTimeout(timeout);
-    }, [loadManifest]);
+    }, [loadHostInfo, loadManifest]);
 
     useEffect(() => {
         onBusyChange(busy);
@@ -141,7 +149,7 @@ export function AgentDeployment({server, onChanged, onBusyChange}: {
                         providers: current.providers.filter(provider => provider.name !== removedName),
                     } : current);
                 }
-                await loadManifest(true);
+                await Promise.all([loadManifest(true), loadHostInfo()]);
                 onChanged();
             } catch (error) {
                 if (!cancelled) handleError(error);
@@ -153,7 +161,7 @@ export function AgentDeployment({server, onChanged, onBusyChange}: {
             cancelled = true;
             window.clearInterval(interval);
         };
-    }, [deploying, handleError, loadManifest, onChanged, request, server.id, t]);
+    }, [deploying, handleError, loadHostInfo, loadManifest, onChanged, request, server.id, t]);
 
     const submitUnlock = async (secret: string, applyToAll = false) => {
         if (!request) return;
@@ -181,7 +189,8 @@ export function AgentDeployment({server, onChanged, onBusyChange}: {
         <div className="rounded-xl border border-border bg-card p-6 dark:border-white/5 dark:bg-white/3">
             <div className="mb-1 flex items-center gap-2 text-lg font-semibold"><Rocket size={20} />{t('servers.deployAgentTitle')}</div>
             <p className="mb-5 text-sm text-muted-foreground">{t('servers.agentModal.packDeployHint')}</p>
-            <div className="flex justify-end">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-mono text-xs text-muted-foreground">{hostInfo?.version || '—'}</span>
                 <button type="button" onClick={() => setAddingAgent(true)} disabled={busy} className={cn(buttons.primary, 'inline-flex items-center gap-2')}>
                     <Rocket size={14} />{busy && request?.kind === 'agent' ? t('servers.deploying') : t('servers.deployAgent')}
                 </button>

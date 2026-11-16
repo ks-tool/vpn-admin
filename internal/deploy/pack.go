@@ -340,9 +340,8 @@ func agentPackValues(srv models.Server, artifact string) (map[string]any, []rend
 		addr = "127.0.0.1:" + defaultAgentPort
 	}
 	env := map[string]any{
-		"VPN_AGENT_ADDR":         addr,
-		"VPN_AGENT_DB":           remoteDBPath,
-		"VPN_AGENT_LEGACY_PROXY": "http://127.0.0.1:9091",
+		"VPN_AGENT_ADDR": addr,
+		"VPN_AGENT_DB":   remoteDBPath,
 	}
 	values := map[string]any{"env": env}
 	if len(artifact) > 0 {

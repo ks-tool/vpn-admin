@@ -24,7 +24,7 @@ import {Modal} from '@/components/common/Modal';
 import {buttons, inputs} from '@/components/common/controls';
 import {ImportInterfaceModal} from '@/components/server/ImportInterfaceModal';
 import {SchemaForm} from '@/components/topology/SchemaForm';
-import {listUnmanagedInterfaces} from '@/services/servers';
+import {listUnmanagedInterfaces, syncServer} from '@/services/servers';
 import {
     deleteProviderResource,
     getProviderManifest,
@@ -60,6 +60,7 @@ export function ResourceManager({serverId, onChanged}: {serverId: string; onChan
     const [resources, setResources] = useState<ListedResource[]>([]);
     const [unmanaged, setUnmanaged] = useState<UnmanagedInterface[]>([]);
     const [loading, setLoading] = useState(true);
+    const [syncing, setSyncing] = useState(false);
     const [editor, setEditor] = useState<EditorState | null>(null);
     const [deleting, setDeleting] = useState<ListedResource | null>(null);
     const [action, setAction] = useState<ActionState | null>(null);
@@ -96,6 +97,24 @@ export function ResourceManager({serverId, onChanged}: {serverId: string; onChan
             setLoading(false);
         }
     }, [load, t]);
+
+    const sync = useCallback(async () => {
+        setSyncing(true);
+        try {
+            const ok = await syncServer(serverId);
+            if (!ok) {
+                toast.error(t('servers.syncError'));
+                return;
+            }
+            await refresh();
+            onChanged?.();
+            toast.success(t('servers.syncSuccess'));
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : t('servers.syncError'));
+        } finally {
+            setSyncing(false);
+        }
+    }, [onChanged, refresh, serverId, t]);
 
     useEffect(() => {
         const timeout = window.setTimeout(() => void refresh(), 0);
@@ -175,7 +194,15 @@ export function ResourceManager({serverId, onChanged}: {serverId: string; onChan
             <div className="mb-4 flex items-center justify-between">
                 <h2 className="flex items-center gap-2 text-lg font-semibold"><Network size={20} />{t('servers.interface')} ({resources.length})</h2>
                 <div className="flex gap-2">
-                    <button type="button" onClick={() => void refresh()} disabled={loading} className={buttons.secondary} title={t('common.refresh')}><RefreshCw size={14} className={loading ? 'animate-spin' : ''} /></button>
+                    <button
+                        type="button"
+                        onClick={() => void sync()}
+                        disabled={syncing || busy || loading}
+                        className={cn(buttons.secondary, 'inline-flex items-center gap-1.5')}
+                        title={t('servers.syncTooltip')}
+                    >
+                        <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
+                    </button>
                     <button
                         type="button"
                         onClick={() => setImportTarget('')}
@@ -191,16 +218,6 @@ export function ResourceManager({serverId, onChanged}: {serverId: string; onChan
                     ><Plus size={14} /></button>
                 </div>
             </div>
-            {interfaceProviders.length > 0 && (
-                <div className="mb-4 flex flex-wrap gap-2">
-                    {interfaceProviders.map(provider => (
-                        <div key={provider.name} className="rounded-lg border border-border bg-background px-3 py-2 text-xs dark:border-white/10 dark:bg-white/5">
-                            <span className="font-semibold">{provider.name}</span>
-                            <span className="ml-2 font-mono text-muted-foreground">{provider.version}</span>
-                        </div>
-                    ))}
-                </div>
-            )}
             {loading ? <div className="py-8 text-center text-sm text-muted-foreground">{t('common.loading')}</div> : resources.length === 0 && unmanaged.length === 0 ? (
                 <div className="py-4 text-center text-muted-foreground">{t('servers.interfaces.noInterfaces')}</div>
             ) : (
@@ -221,7 +238,7 @@ export function ResourceManager({serverId, onChanged}: {serverId: string; onChan
                                         {condition?.message && <div className={cn('mt-2 text-xs', condition.status === 'False' ? 'text-red-500' : 'text-muted-foreground')}>{condition.reason}: {condition.message}</div>}
                                     </div>
                                     <div className="flex shrink-0 gap-2">
-                                        {item.definition.actions?.map(actionDefinition => <button key={actionDefinition.name} type="button" disabled={busy} onClick={() => setAction({item, action: actionDefinition})} title={actionDefinition.title} className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"><Play size={15} /></button>)}
+                                        {item.definition.actions?.map(actionDefinition => <button key={actionDefinition.name} type="button" disabled={busy} onClick={() => setAction({item, action: actionDefinition})} title={actionDefinition.title} aria-label={actionDefinition.title} className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground">{actionDefinition.name === 'importSecret' ? <FileInput size={15} /> : <Play size={15} />}</button>)}
                                         {supportsDisabled(item.definition) && <button type="button" disabled={busy} onClick={() => void toggleDisabled(item)} title={disabled ? t('resources.activate') : t('resources.deactivate')} className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"><Power size={16} /></button>}
                                         <button type="button" disabled={busy} onClick={() => setEditor({provider: item.provider, kind: item.resource.kind, resource: item.resource})} title={t('common.edit')} className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"><Edit2 size={16} /></button>
                                         <button type="button" disabled={busy} onClick={() => setDeleting(item)} title={t('common.delete')} className="rounded p-1 text-muted-foreground hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-500/10"><Trash2 size={16} /></button>
