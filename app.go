@@ -19,7 +19,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -99,97 +98,17 @@ func (a *App) SelectFile(title string) (string, error) {
 	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{Title: title})
 }
 
-// SavePeerQRCode renders key's client-config QR code (see GetPeerQRCode) as a
-// PNG and writes it to a file the user chooses via a native save dialog. This
-// is the desktop path for "save QR as PNG": the Wails webview can't download a
-// data: URL the way a browser tab can (an <a download> is a no-op there), so
-// the file is written here in Go instead. Returns true if a file was written,
-// false if the dialog was cancelled. Desktop-only (a.ctx is set in startup);
-// in any other mode it returns false so the frontend falls back to a browser
-// download.
-func (a *App) SavePeerQRCode(userID, key, defaultName string) (bool, error) {
+// SaveTextFile saves a provider action result through the desktop save dialog.
+func (a *App) SaveTextFile(title, defaultName, content string) (bool, error) {
 	if a.ctx == nil {
 		return false, nil
 	}
-
-	b64, err := a.GetPeerQRCode(userID, key)
-	if err != nil {
+	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{Title: title, DefaultFilename: defaultName})
+	if err != nil || path == "" {
 		return false, err
 	}
-	png, err := base64.StdEncoding.DecodeString(b64)
-	if err != nil {
-		return false, fmt.Errorf("decode QR code: %w", err)
-	}
-
-	if defaultName == "" {
-		defaultName = "peer"
-	}
-	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
-		Title:           "Save QR code",
-		DefaultFilename: defaultName + ".png",
-		Filters: []runtime.FileFilter{{
-			DisplayName: "PNG image (*.png)",
-			Pattern:     "*.png",
-		}},
-	})
-	if err != nil {
-		return false, err
-	}
-	if path == "" {
-		return false, nil // dialog cancelled
-	}
-	if filepath.Ext(path) == "" {
-		path += ".png"
-	}
-
-	if err := os.WriteFile(path, png, 0o644); err != nil {
-		return false, fmt.Errorf("write QR code: %w", err)
-	}
-	return true, nil
-}
-
-// SavePeerConfig writes key's client config (see GetPeerConfig) to a file the
-// user chooses via a native save dialog — the desktop path for the QR modal's
-// "save config to file" button, mirroring SavePeerQRCode (an <a download> is a
-// no-op in the Wails webview). Keeping this in Go also means the config text —
-// which embeds the peer's private key — reaches the disk without ever crossing
-// into the JS runtime, so it's written 0600 like Backup. Returns true if a
-// file was written, false if the dialog was cancelled. Desktop-only (a.ctx is
-// set in startup); in any other mode it returns false so the frontend falls
-// back to a browser download.
-func (a *App) SavePeerConfig(userID, key, defaultName string) (bool, error) {
-	if a.ctx == nil {
-		return false, nil
-	}
-
-	cfg, err := a.GetPeerConfig(userID, key)
-	if err != nil {
-		return false, err
-	}
-
-	if defaultName == "" {
-		defaultName = "peer"
-	}
-	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
-		Title:           "Save config",
-		DefaultFilename: defaultName + ".conf",
-		Filters: []runtime.FileFilter{{
-			DisplayName: "WireGuard config (*.conf)",
-			Pattern:     "*.conf",
-		}},
-	})
-	if err != nil {
-		return false, err
-	}
-	if path == "" {
-		return false, nil // dialog cancelled
-	}
-	if filepath.Ext(path) == "" {
-		path += ".conf"
-	}
-
-	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
-		return false, fmt.Errorf("write config: %w", err)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		return false, fmt.Errorf("write action result: %w", err)
 	}
 	return true, nil
 }

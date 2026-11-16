@@ -36,7 +36,9 @@ import {getServerInterfaceMetricsHistory, getServerMetricsHistory} from '@/servi
 import {useAppStore} from '@/store';
 import {byName, cn, formatBytes} from '@/lib/utils';
 import {b64ToHex, isPeerConnected} from '@/lib/peers';
-import type {PeerHistoryPoint, SystemHistory, SystemHistoryPoint} from '@/types';
+import type {InterfaceHistory, PeerHistoryPoint, SystemHistory, SystemHistoryPoint} from '@/types';
+
+type ServerHistory = SystemHistory & {interfaces: InterfaceHistory[]};
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend);
 
@@ -231,20 +233,20 @@ export function ServerMetricsModal({serverId, serverName, onChanged, onClose}: P
     const {t} = useTranslation();
     const users = useAppStore((s) => s.users);
     const servers = useAppStore((s) => s.servers);
-    const interfacesById = useAppStore((s) => s.interfaces);
-    const [history, setHistory] = useState<SystemHistory | null>(null);
+    const resources = useAppStore((s) => s.resources);
+    const [history, setHistory] = useState<ServerHistory | null>(null);
     const [loading, setLoading] = useState(true);
     const [manageTab, setManageTab] = useState<ManageTab>('interfaces');
     const [tab, setTab] = useState<MetricsTab>('system');
     const [range, setRange] = useState<RangeKey>('all');
     const [deploymentBusy, setDeploymentBusy] = useState(false);
-    const server = servers.find(server => server.id === serverId);
+    const server = servers.find(item => item.id === serverId);
     const handleChanged = useCallback(() => { void onChanged?.(); }, [onChanged]);
 
     useEffect(() => {
         if (manageTab !== 'metrics') return;
         let cancelled = false;
-        const interfaceIds = server?.interfaces ?? [];
+        const interfaceIds = resources.filter(resource => resource.serverId === serverId && resource.kind === 'Interface').map(resource => resource.id);
         void Promise.all([
             getServerMetricsHistory(serverId),
             Promise.all(interfaceIds.map(id => getServerInterfaceMetricsHistory(serverId, id))),
@@ -259,7 +261,7 @@ export function ServerMetricsModal({serverId, serverName, onChanged, onClose}: P
         return () => {
             cancelled = true;
         };
-    }, [serverId, manageTab, server]);
+    }, [serverId, manageTab, resources]);
 
     // Restrict every series (system points + each peer's points) to the
     // selected window. The cutoff is relative to the newest retained sample —
@@ -293,49 +295,19 @@ export function ServerMetricsModal({serverId, serverName, onChanged, onClose}: P
 
     const points = filtered?.points ?? null;
 
-    // Resolve a peer's public key to "<user>/<peer>" using the admin's own
-    // user→peer records (the agent only knows public keys). Unknown keys —
-    // e.g. a peer added directly on the box — fall back to a short key.
     const peerLabels = useMemo(() => {
-        const m = new Map<string, string>();
-        for (const u of users) {
-            for (const p of u.peers ?? []) {
-                const hex = b64ToHex(p.pk);
-                if (hex) m.set(hex, `${u.name}/${p.name}`);
-            }
+        const labels = new Map<string, string>();
+        const userNames = new Map(users.map(user => [user.id, user.name]));
+        for (const resource of resources) {
+            if (resource.kind !== 'Peer') continue;
+            const publicKey = typeof resource.spec.publicKey === 'string' ? resource.spec.publicKey : '';
+            const hex = b64ToHex(publicKey);
+            const userName = userNames.get(String(resource.spec.userRef ?? ''));
+            const peerName = typeof resource.spec.name === 'string' ? resource.spec.name : resource.name;
+            if (hex) labels.set(hex, userName ? `${userName}/${peerName}` : peerName);
         }
-        return m;
-    }, [users]);
-
-    // For each of THIS server's tunnel-member interfaces (by name), the tunnel's
-    // two member servers as "<entry-server>/<exit-server>". An unnamed peer on
-    // such an interface is the tunnel's gateway peer (the other member — not a
-    // user peer), so it's labelled with the tunnel it belongs to rather than a
-    // bare short key. Entry (has a listen port) is put first for a stable order.
-    const tunnelLabelByIface = useMemo(() => {
-        const byTunnel = new Map<string, {name: string; entry: boolean}[]>();
-        for (const s of servers) {
-            for (const id of s.interfaces ?? []) {
-                const iface = interfacesById.get(id);
-                if (!iface?.tunnel) continue;
-                const arr = byTunnel.get(iface.tunnel) ?? [];
-                arr.push({name: s.name, entry: !!iface.listen});
-                byTunnel.set(iface.tunnel, arr);
-            }
-        }
-        const map = new Map<string, string>();
-        const server = servers.find((s) => s.id === serverId);
-        for (const id of server?.interfaces ?? []) {
-            const iface = interfacesById.get(id);
-            if (!iface?.tunnel) continue;
-            const members = (byTunnel.get(iface.tunnel) ?? [])
-                .slice()
-                .sort((a, b) => (a.entry === b.entry ? 0 : a.entry ? -1 : 1))
-                .map((m) => m.name);
-            map.set(iface.iface, members.join('/'));
-        }
-        return map;
-    }, [servers, interfacesById, serverId]);
+        return labels;
+    }, [resources, users]);
 
     const peerRows = useMemo(() => {
         const rows = (filtered?.interfaces ?? []).flatMap((iface) =>
@@ -346,14 +318,7 @@ export function ServerMetricsModal({serverId, serverName, onChanged, onClose}: P
                 // keeps this array the same length as `activity`.
                 const times = peer.points.slice(1).map((p) => tsMs(p.timestamp));
                 const known = peerLabels.get(peer.publicKey);
-                const tunnel = tunnelLabelByIface.get(iface.interface);
-                // A gateway peer of a tunnel: not a user peer, but sitting on a
-                // tunnel-member interface. Pinned to the top of the list below.
-                const isTunnel = !known && !!tunnel;
-                const label = known
-                    ?? (tunnel
-                        ? `${t('servers.metricsTunnelPeer')} ${tunnel}`
-                        : shortKey(peer.publicKey));
+                const label = known ?? shortKey(peer.publicKey);
                 // "Online now" is judged from the peer's most recent retained
                 // sample: its lastHandshake against that sample's own timestamp
                 // (the agent's clock), so host clock skew cancels.
@@ -365,20 +330,15 @@ export function ServerMetricsModal({serverId, serverName, onChanged, onClose}: P
                     publicKey: peer.publicKey,
                     label,
                     online,
-                    isTunnel,
                     activity,
                     times,
                     total: activity.reduce((sum, v) => sum + v, 0),
                 };
             }),
         );
-        // Tunnel gateway peers always pinned to the top; everyone else A→Z by
-        // label (case/locale-aware, so Cyrillic user names sort naturally).
         const byLabel = byName<(typeof rows)[number]>((r) => r.label);
-        return rows.sort((a, b) =>
-            a.isTunnel !== b.isTunnel ? (a.isTunnel ? -1 : 1) : byLabel(a, b),
-        );
-    }, [filtered, peerLabels, tunnelLabelByIface, t]);
+        return rows.sort(byLabel);
+    }, [filtered, peerLabels]);
 
     const labels = points?.map(timeLabel) ?? [];
 

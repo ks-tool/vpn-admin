@@ -29,10 +29,8 @@ import (
 )
 
 const (
-	configKey              = "config"
 	serversBucketName      = "servers"
 	usersBucketName        = "users"
-	interfacesBucketName   = "interfaces"
 	authBucketName         = "auth"
 	agentSourcesBucketName = "agent_sources"
 	registrySourcesBucket  = "registry_sources"
@@ -41,7 +39,6 @@ const (
 
 var (
 	bktServers         = []byte(serversBucketName)
-	bktInterfaces      = []byte(interfacesBucketName)
 	bktUsers           = []byte(usersBucketName)
 	bktAuth            = []byte(authBucketName)
 	bktAgentSources    = []byte(agentSourcesBucketName)

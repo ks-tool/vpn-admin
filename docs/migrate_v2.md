@@ -77,32 +77,22 @@ awg-migrate v2 --db ~/.awg-admin --out ~/.vpn-admin/db --force
 
 Use `--force` only when replacing the destination is intentional. It does not modify the v1 source.
 
-### If the source is already v2
+### Only the original v1 database is accepted
 
-A database that already has the `resources` and `links` buckets is a v2 database even when it is still named
-`~/.awg-admin`. Do not migrate it again. Stop vpn-admin and copy it to the expected destination without creating a
-JSON dump containing secrets:
+The source must be the original `awg-admin` v1 database. A database already used by an experimental v2 version is not a migration source. Use the preserved v1 file instead; the migrator rejects inputs with existing `resources` or `links` buckets and creates no destination file for them.
 
-```sh
-mkdir -p ~/.vpn-admin
-chmod 700 ~/.vpn-admin
-cp ~/.awg-admin ~/.vpn-admin/db
-chmod 600 ~/.vpn-admin/db
-```
-
-If `~/.vpn-admin/db` already exists, back it up before intentionally replacing it. The migrator reports
-`source is already a v2 database` for this case and creates no destination file.
+If `~/.vpn-admin/db` already exists, back it up before intentionally replacing it with `--force`.
 
 ### What is converted
 
 - Servers, including UUID, Location, SSH settings and agent mTLS material, are preserved.
 - Users, peers, administrator credentials, agent sources and topology coordinates are preserved.
 - Legacy interfaces become `awg.ks-tool.dev/v1` resources with `Kind=Interface`; interface UUIDs are preserved.
-- User peers become `Kind=Peer` resources with `interfaceRef` and `userRef`.
+- User peers and peers without a user become `Kind=Peer` resources; user peers retain `interfaceRef` and `userRef`.
 - Legacy tunnels and topology connections become `Link` records.
-- New `resources`, `links`, `providers` and `meta` buckets are created.
+- New `resources`, `links`, `providers`, `secrets` and `meta` buckets are created. The legacy `interfaces` bucket and embedded server/user peer lists are not copied.
 - `meta.schemaVersion` is set to `2`.
-- Private keys are not placed in resource `spec` documents.
+- Private keys and lifecycle hooks are not placed in resource `spec` documents. Pending secrets are stored separately in `secrets` and removed only after the provider accepts them through `importSecret`.
 
 ### Start vpn-admin v2
 
@@ -213,32 +203,22 @@ awg-migrate v2 --db ~/.awg-admin --out ~/.vpn-admin/db --force
 
 Используйте `--force` только при необходимости заменить целевую БД. Этот флаг не изменяет источник v1.
 
-### Если источник уже имеет схему v2
+### Источник — только исходная БД v1
 
-БД, в которой уже существуют buckets `resources` и `links`, является БД v2, даже если файл всё ещё называется
-`~/.awg-admin`. Повторная миграция не нужна. Остановите vpn-admin и скопируйте файл в ожидаемый путь, не создавая
-JSON-дамп с секретами:
+Мигратор принимает только исходную БД `awg-admin` v1. БД, уже использованная экспериментальной версией v2, не является источником миграции. Используйте сохранённый файл v1. При наличии buckets `resources` или `links` входной файл отклоняется, а целевой файл не создаётся.
 
-```sh
-mkdir -p ~/.vpn-admin
-chmod 700 ~/.vpn-admin
-cp ~/.awg-admin ~/.vpn-admin/db
-chmod 600 ~/.vpn-admin/db
-```
-
-Если `~/.vpn-admin/db` уже существует, создайте его резервную копию перед намеренной заменой. В таком случае мигратор
-сообщает `source is already a v2 database` и не создаёт целевой файл.
+Если `~/.vpn-admin/db` уже существует, создайте его резервную копию перед намеренной заменой с `--force`.
 
 ### Что преобразуется
 
 - Сохраняются серверы, включая UUID, Location, SSH-настройки и mTLS-материал агентов.
 - Сохраняются пользователи, пиры, учётные данные администратора, источники агентов и координаты топологии.
 - Прежние интерфейсы становятся ресурсами `awg.ks-tool.dev/v1` с `Kind=Interface`; UUID интерфейсов сохраняются.
-- Пиры пользователей становятся ресурсами `Kind=Peer` со ссылками `interfaceRef` и `userRef`.
+- Все пиры становятся ресурсами `Kind=Peer`; у пользовательских пиров сохраняются `interfaceRef` и `userRef`.
 - Прежние туннели и связи топологии становятся записями `Link`.
-- Создаются buckets `resources`, `links`, `providers` и `meta`.
+- Создаются buckets `resources`, `links`, `providers`, `secrets` и `meta`. Bucket `interfaces` и встроенные списки пиров в серверах/пользователях не копируются.
 - В `meta.schemaVersion` записывается значение `2`.
-- Приватные ключи не помещаются в документы `spec` ресурсов.
+- Приватные ключи и lifecycle-хуки не помещаются в `spec`. Ожидающие переноса секреты хранятся отдельно в `secrets` и удаляются только после успешного `importSecret` провайдером.
 
 ### Запуск vpn-admin v2
 

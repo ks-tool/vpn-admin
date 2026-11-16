@@ -51,6 +51,13 @@ export async function getProviderSchema(serverId: string, provider: string): Pro
         : unwrap(await get<ProviderDefinition>(`${base(serverId, provider)}/schema`));
 }
 
+export async function listResources(serverId: string): Promise<ProviderResource[]> {
+    const result = isDesktop()
+        ? await binding<ProviderResource[]>(() => AppBindings.ListResources(serverId))
+        : unwrap(await get<ProviderResource[]>(`/servers/${encodeURIComponent(serverId)}/resources`));
+    return result ?? [];
+}
+
 export async function listProviderResources(serverId: string, provider: string): Promise<ProviderResource[]> {
     const result = isDesktop()
         ? await binding<ProviderResource[]>(() => AppBindings.ListProviderResources(serverId, provider))
@@ -79,6 +86,20 @@ export async function runProviderResourceAction(serverId: string, provider: stri
     return isDesktop()
         ? binding(() => AppBindings.RunProviderResourceAction(serverId, provider, kind, name, action, args as never))
         : unwrap(await post<ActionResult, {arguments: Record<string, unknown>}>(`${resourcePath(serverId, provider, kind, name)}/actions/${encodeURIComponent(action)}`, {arguments: args}));
+}
+
+export async function saveActionResult(result: ActionResult, content: string): Promise<void> {
+    const fileName = result.fileName || 'result.txt';
+    if (isDesktop()) {
+        await binding(() => AppBindings.SaveTextFile(result.fileName || 'Save action result', fileName, content));
+        return;
+    }
+    const url = URL.createObjectURL(new Blob([content], {type: result.mediaType || 'text/plain'}));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = fileName;
+    anchor.click();
+    URL.revokeObjectURL(url);
 }
 
 export async function listProviderLinks(): Promise<ProviderLink[]> {

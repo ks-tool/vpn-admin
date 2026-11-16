@@ -18,8 +18,11 @@ package service
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"testing"
+	"uuid"
 
+	"github.com/ks-tool/vpn-admin/models"
 	awgmodels "github.com/ks-tool/vpn-agent/v2/providers/awg/models"
 )
 
@@ -27,35 +30,30 @@ func TestGetTunnelMetricsMatchesDestinationPublicKey(t *testing.T) {
 	svc := newTestService(t)
 	sourceServer, sourceAgent := newLinkTestServer(t, svc, "a")
 	targetServer, _ := newLinkTestServer(t, svc, "b")
-	source, err := svc.CreateInterface(sourceServer.ID.String(), awgmodels.InterfaceConfig{Interface: "awg0", Address: "10.0.0.1/24", ListenPort: 51820})
+	source := models.Resource{ID: uuid.New().String(), ServerID: sourceServer.ID.String(), APIVersion: "test/v1", Kind: "Interface", Name: "awg0", Spec: []byte(`{}`)}
+	targetKey, err := awgmodels.GeneratePrivateKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	target, err := svc.CreateInterface(targetServer.ID.String(), awgmodels.InterfaceConfig{Interface: "awg0", Address: "10.0.0.2/24", ListenPort: 51820})
-	if err != nil {
-		t.Fatal(err)
+	targetPublicKey := targetKey.PublicKey()
+	providerStatus, _ := json.Marshal(map[string]string{"publicKey": targetPublicKey.String()})
+	target := models.Resource{ID: uuid.New().String(), ServerID: targetServer.ID.String(), APIVersion: "test/v1", Kind: "Interface", Name: "awg0", Spec: []byte(`{}`), Status: models.ResourceStatus{Provider: providerStatus}}
+	for _, resource := range []models.Resource{source, target} {
+		if err := svc.saveProviderResource(resource.ServerID, resource); err != nil {
+			t.Fatal(err)
+		}
 	}
-	connection, err := svc.CreateNetworkConnection(source.ID.String(), target.ID.String())
+	connection, err := svc.CreateProviderLink(source.ID, target.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	p95 := 87.5
-	targetKey := target.PrivateKey.PublicKey()
-	sourceAgent.mu.Lock()
-	sourceAgent.metrics[source.Interface] = awgmodels.InterfaceSnapshot{
-		Interface: source.Interface,
-		Peers:     []awgmodels.PeerSnapshot{{PublicKey: hex.EncodeToString(targetKey[:]), LatencyP95Ms: &p95}},
-	}
-	sourceAgent.mu.Unlock()
-
+	sourceAgent.metrics[source.Name] = awgmodels.InterfaceSnapshot{Interface: source.Name, Peers: []awgmodels.PeerSnapshot{{PublicKey: hex.EncodeToString(targetPublicKey[:]), LatencyP95Ms: &p95}}}
 	metrics, err := svc.GetTunnelMetrics()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(metrics) != 1 || metrics[0].ConnectionID != connection.ID.String() {
+	if len(metrics) != 1 || metrics[0].ConnectionID != "link:"+connection.ID || metrics[0].LatencyP95Ms == nil || *metrics[0].LatencyP95Ms != p95 {
 		t.Fatalf("unexpected tunnel metrics: %+v", metrics)
-	}
-	if metrics[0].LatencyP95Ms == nil || *metrics[0].LatencyP95Ms != p95 {
-		t.Fatalf("latency p95 = %v, want %v", metrics[0].LatencyP95Ms, p95)
 	}
 }

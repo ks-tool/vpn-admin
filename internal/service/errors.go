@@ -17,27 +17,16 @@
 package service
 
 import (
-	"strings"
-	"testing"
-
-	awgmodels "github.com/ks-tool/vpn-agent/v2/providers/awg/models"
+	"fmt"
+	"time"
 )
 
-func TestWriteAmneziaParamsMTU(t *testing.T) {
-	for _, test := range []struct {
-		name string
-		mtu  int
-		want string
-	}{
-		{name: "configured", mtu: 1280, want: "MTU = 1280\n"},
-		{name: "unset"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			var config strings.Builder
-			writeAmneziaParams(&config, awgmodels.InterfaceConfig{MTU: test.mtu})
-			if config.String() != test.want {
-				t.Fatalf("parameters = %q, want %q", config.String(), test.want)
-			}
-		})
-	}
+const pushTimeout = 15 * time.Second
+
+type ValidationError struct{ Msg string }
+
+func (e *ValidationError) Error() string { return e.Msg }
+
+func invalidInput(format string, args ...any) error {
+	return &ValidationError{Msg: fmt.Sprintf(format, args...)}
 }

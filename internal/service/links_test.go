@@ -131,43 +131,6 @@ func TestLinkPortsMustAcceptEachOther(t *testing.T) {
 	}
 }
 
-func TestDeleteProviderLinkClearsMigratedLegacyTunnel(t *testing.T) {
-	svc := newTestService(t)
-	server, _ := newLinkTestServer(t, svc, "a")
-	tunnelID := uuid.New()
-	ids := []uuid.UUID{uuid.New(), uuid.New()}
-	for _, id := range ids {
-		iface := &models.Interface{ID: id, Tunnel: &tunnelID, Interface: "awg" + id.String()[:4], Address: "10.0.0.1/24", ListenPort: 51820}
-		if err := svc.store.Servers().Interfaces(server.ID).Set(iface); err != nil {
-			t.Fatal(err)
-		}
-		item := models.Resource{ID: id.String(), ServerID: server.ID.String(), APIVersion: "test/v1", Kind: "Service", Name: id.String(), Spec: json.RawMessage(`{}`)}
-		if err := svc.saveProviderResource(server.ID.String(), item); err != nil {
-			t.Fatal(err)
-		}
-	}
-	link, err := svc.CreateProviderLink(ids[0].String(), ids[1].String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	link.Spec = json.RawMessage(`{"tunnelId":"` + tunnelID.String() + `"}`)
-	if err := svc.store.Links().Set(link); err != nil {
-		t.Fatal(err)
-	}
-	if err := svc.DeleteProviderLink(link.ID); err != nil {
-		t.Fatal(err)
-	}
-	for _, id := range ids {
-		iface, err := svc.store.Servers().Interfaces(server.ID).Get(id)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if iface.Tunnel != nil {
-			t.Fatalf("legacy tunnel guard survived link deletion: %+v", iface.Tunnel)
-		}
-	}
-}
-
 func TestMoveProviderLink(t *testing.T) {
 	svc := newTestService(t)
 	serverA, _ := newLinkTestServer(t, svc, "a")

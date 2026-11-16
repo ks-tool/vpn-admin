@@ -17,18 +17,14 @@
 package boltdb
 
 import (
-	"fmt"
 	"uuid"
 
 	"github.com/ks-tool/vpn-admin/models"
 	"github.com/ks-tool/vpn-admin/storage"
-
 	bolt "go.etcd.io/bbolt"
 )
 
-type users struct {
-	db *bolt.DB
-}
+type users struct{ db *bolt.DB }
 
 func (u *users) List() ([]models.User, error) {
 	return list[models.User](u.db, bktUsers)
@@ -46,28 +42,16 @@ func (u *users) Get(id uuid.UUID) (*models.User, error) {
 
 func (u *users) Set(user *models.User) error {
 	return u.db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket(bktUsers)
-		return put(b, idKey(user.ID), user)
+		return put(tx.Bucket(bktUsers), idKey(user.ID), user)
 	})
 }
 
 func (u *users) Delete(id uuid.UUID) error {
 	return u.db.Update(func(tx *bolt.Tx) error {
-		ub := tx.Bucket(bktUsers)
-		user, err := get[models.User](ub, idKey(id))
-		if err != nil {
-			return err
+		bucket := tx.Bucket(bktUsers)
+		if bucket.Get(idKey(id)) == nil {
+			return storage.ErrNotFound
 		}
-		ib := tx.Bucket(bktInterfaces)
-		for _, peer := range user.Peers {
-			if err = removePeerFromInterface(ib, peer.InterfaceId, peer.PrivateKey.PublicKey()); err != nil {
-				return fmt.Errorf("cascade remove peer from interface %s: %w", peer.InterfaceId, err)
-			}
-		}
-		return ub.Delete(idKey(id))
+		return bucket.Delete(idKey(id))
 	})
-}
-
-func (u *users) Peers(userID uuid.UUID) storage.Peers {
-	return &peers{db: u.db, userID: userID}
 }

@@ -17,13 +17,9 @@
 package service
 
 import (
-	"context"
 	"sync"
 
-	"github.com/ks-tool/vpn-admin/internal/deploy"
-	"github.com/ks-tool/vpn-admin/internal/plugin"
 	"github.com/ks-tool/vpn-admin/internal/sshclient"
-	"github.com/ks-tool/vpn-admin/models"
 	"github.com/ks-tool/vpn-admin/storage"
 
 	"github.com/rs/zerolog"
@@ -45,26 +41,14 @@ func debugOp(op string) *zerolog.Event {
 
 type Option func(*Service)
 
-func GeneratePresharedKey() Option {
-	return func(h *Service) {
-		h.generatePresharedKey = true
-	}
-}
-
 // WithVersion sets the admin app's build version (set at link time via
 // -ldflags "-X main.version=..." in each entry point). Surfaced to the UI by
 // AppVersion so the Settings page can show it. Defaults to "dev".
 func WithVersion(v string) Option {
 	return func(h *Service) {
-		if v != "" {
+		if len(v) > 0 {
 			h.version = v
 		}
-	}
-}
-
-func WithPluginRegistry(registry *plugin.Registry) Option {
-	return func(h *Service) {
-		h.plugins = registry
 	}
 }
 
@@ -77,25 +61,16 @@ func withGeocoder(geocoder locationGeocoder) Option {
 type Service struct {
 	store            storage.Storage
 	tunnels          *sshclient.Manager
-	plugins          *plugin.Registry
 	providerRegistry *providerRegistry
 	providerRefresh  sync.WaitGroup
 	geocoder         locationGeocoder
 	topologyMu       sync.Mutex
-	firewallMu       sync.Mutex
-	firewallRunning  map[string]bool
-	firewallDesired  map[string]string
-	firewallApplied  map[string]string
-	applyFirewall    func(context.Context, models.Server, []string, string, string) error
-
-	deployStatus *deployStatusStore
-
-	generatePresharedKey bool
-	version              string
+	deployStatus     *deployStatusStore
+	version          string
 }
 
 func New(s storage.Storage, opts ...Option) *Service {
-	svc := &Service{store: s, tunnels: sshclient.NewManager(), plugins: defaultPluginRegistry(), providerRegistry: newProviderRegistry(), geocoder: defaultLocationGeocoder(), deployStatus: newDeployStatusStore(), version: "dev", firewallRunning: map[string]bool{}, firewallDesired: map[string]string{}, firewallApplied: map[string]string{}, applyFirewall: deploy.SyncFirewall}
+	svc := &Service{store: s, tunnels: sshclient.NewManager(), providerRegistry: newProviderRegistry(), geocoder: defaultLocationGeocoder(), deployStatus: newDeployStatusStore(), version: "dev"}
 	for _, opt := range opts {
 		opt(svc)
 	}

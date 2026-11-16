@@ -14,20 +14,19 @@
   limitations under the License.
 */
 
-import type {NetworkConnection, ProviderLink} from '@/types';
+import type {ProviderLink} from '@/types';
 
-export function mergeProviderLinks(connections: NetworkConnection[], links: ProviderLink[]): NetworkConnection[] {
-    const providerConnections = links.map(link => ({id: `link:${link.id}`, sourceId: link.source.resourceId, targetId: link.target.resourceId}));
-    const seen = new Set<string>();
-    return [...providerConnections, ...connections].filter(connection => {
-        const key = `${connection.sourceId}:${connection.targetId}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-    });
+export interface TopologyConnection {
+    id: string;
+    sourceId: string;
+    targetId: string;
 }
 
-export function canCreateTopologyConnection(connections: NetworkConnection[], source: string, target: string): boolean {
+export function providerConnections(links: ProviderLink[]): TopologyConnection[] {
+    return links.map(link => ({id: `link:${link.id}`, sourceId: link.source.resourceId, targetId: link.target.resourceId}));
+}
+
+export function canCreateTopologyConnection(connections: TopologyConnection[], source: string, target: string): boolean {
     if (source === target || connections.some(connection => connection.sourceId === source && connection.targetId === target)) return false;
     const next = new Map<string, string[]>();
     for (const connection of connections) {

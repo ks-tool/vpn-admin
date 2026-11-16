@@ -1,9 +1,6 @@
 type_mappings:
   time.Time: number /* time.Time */
   time.Duration: number /* time in nanoseconds (time.Duration) */
-  agentmodels.Key: Key
-  wgtypes.Key: string
-  agentmodels.InterfaceConfig: InterfaceConfig
   uuid.UUID: string
 
 packages:
@@ -49,4 +46,3 @@ packages:
         See the License for the specific language governing permissions and
         limitations under the License.
        */
-      import { type Key, type InterfaceConfig } from "./agent"

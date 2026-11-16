@@ -67,3 +67,16 @@ type ProviderRecord struct {
 	ServerID   string             `json:"serverId"`
 	Definition ProviderDefinition `json:"definition"`
 }
+
+// ResourceSecret temporarily holds v1 material until the provider accepts it.
+// It is stored separately from Resource and is never returned by the API.
+type ResourceSecret struct {
+	ResourceID   string   `json:"resourceId"`
+	ServerID     string   `json:"serverId"`
+	PrivateKey   string   `json:"privateKey,omitempty"`
+	PresharedKey string   `json:"presharedKey,omitempty"`
+	PreUp        []string `json:"preUp,omitempty"`
+	PostUp       []string `json:"postUp,omitempty"`
+	PreDown      []string `json:"preDown,omitempty"`
+	PostDown     []string `json:"postDown,omitempty"`
+}

@@ -79,25 +79,12 @@ func New(svc *service.Service, rootGroup *bunrouter.Group) *SessionStore {
 	protected.WithGroup("/topology", func(gr *bunrouter.Group) {
 		gr.GET("", h.topologyGet)
 		gr.GET("/tunnel-metrics", h.topologyTunnelMetrics)
-		gr.GET("/plugins", h.topologyPluginList)
-		gr.POST("/servers", h.topologyServerCreate)
+
 		gr.PUT("/servers/:serverID", h.topologyServerUpdate)
 		gr.DELETE("/servers/:serverID", h.topologyServerDelete)
 		gr.POST("/servers/:serverID/interfaces", h.topologyInterfaceCreate)
 		gr.PUT("/interfaces/:interfaceID", h.topologyInterfaceUpdate)
 		gr.DELETE("/interfaces/:interfaceID", h.topologyInterfaceDelete)
-		gr.POST("/services", h.topologyServiceCreate)
-		gr.PUT("/services/:serviceID", h.topologyServiceUpdate)
-		gr.DELETE("/services/:serviceID", h.topologyServiceDelete)
-		gr.POST("/services/:serviceID/apply", h.topologyServiceApply)
-		gr.POST("/services/:serviceID/status", h.topologyServiceStatus)
-		gr.GET("/services/:serviceID/users", h.topologyUserList)
-		gr.POST("/services/:serviceID/users", h.topologyUserCreate)
-		gr.PUT("/services/:serviceID/users/*userID", h.topologyUserUpdate)
-		gr.DELETE("/services/:serviceID/users/*userID", h.topologyUserDelete)
-		gr.POST("/connections", h.topologyConnectionCreate)
-		gr.PUT("/connections/:connectionID", h.topologyConnectionMove)
-		gr.DELETE("/connections/:connectionID", h.topologyConnectionDelete)
 		gr.PUT("/positions", h.topologyPositionsUpdate)
 	})
 
@@ -119,20 +106,7 @@ func New(svc *service.Service, rootGroup *bunrouter.Group) *SessionStore {
 			gr.PUT("", h.userUpdate)
 			gr.DELETE("", h.userDelete)
 
-			gr.WithGroup("/peers", func(gr *bunrouter.Group) {
-				gr.POST("", h.peerAdd)
-				gr.POST("/migrate", h.peerMigrate)
-				gr.POST("/disabled", h.peerSetDisabled)
-				gr.GET("/*pubkey", h.peerGet)
-				gr.DELETE("/*pubkey", h.peerDelete)
-			})
 		})
-	})
-
-	protected.WithGroup("/tunnels", func(gr *bunrouter.Group) {
-		gr.POST("", h.tunnelBuild)
-		gr.GET("/", h.tunnelList)
-		gr.DELETE("/:tunnelID", h.tunnelDelete)
 	})
 
 	protected.WithGroup("/links", func(gr *bunrouter.Group) {
@@ -142,9 +116,6 @@ func New(svc *service.Service, rootGroup *bunrouter.Group) *SessionStore {
 		gr.PUT("/:linkID", h.providerLinkMove)
 		gr.DELETE("/:linkID", h.providerLinkDelete)
 	})
-
-	// Server-independent: generated defaults for a new interface form.
-	protected.GET("/interfaces/defaults", h.interfaceDefaults)
 
 	protected.WithGroup("/servers", func(gr *bunrouter.Group) {
 		gr.POST("", h.serverCreate)
@@ -161,12 +132,6 @@ func New(svc *service.Service, rootGroup *bunrouter.Group) *SessionStore {
 			gr.DELETE("/deploy/providers/:provider", h.serverRemoveProvider)
 			gr.GET("/deploy/status", h.serverDeployStatus)
 			gr.POST("/sync", h.serverSync)
-			gr.GET("/reconcile", h.serverReconcile)
-			gr.POST("/reconcile/import", h.serverImportInterface)
-			gr.POST("/reconcile/delete-agent", h.serverDeleteAgentInterface)
-			gr.GET("/unmanaged", h.serverUnmanagedInterfaces)
-			gr.POST("/import/preview", h.serverImportPreview)
-			gr.POST("/import", h.serverImportFromServer)
 			gr.GET("/metrics", h.serverMetrics)
 			gr.GET("/metrics/history", h.serverMetricsHistory)
 			gr.GET("/agent-status", h.serverAgentStatus)
@@ -177,6 +142,7 @@ func New(svc *service.Service, rootGroup *bunrouter.Group) *SessionStore {
 			gr.POST("/ssh/unlock", h.serverUnlockSSH)
 			gr.POST("/sudo/unlock", h.serverUnlockSudo)
 
+			gr.GET("/resources", h.resourceList)
 			gr.GET("/providers/manifest", h.providerManifest)
 			gr.GET("/providers/:provider/schema", h.providerSchema)
 			gr.GET("/providers/:provider/resources", h.providerResourceList)
@@ -185,19 +151,8 @@ func New(svc *service.Service, rootGroup *bunrouter.Group) *SessionStore {
 			gr.GET("/providers/:provider/resources/:kind/:name/status", h.providerResourceStatus)
 			gr.POST("/providers/:provider/resources/:kind/:name/actions/:action", h.providerResourceAction)
 
-			gr.WithGroup("/interfaces", func(gr *bunrouter.Group) {
-				gr.POST("", h.interfaceCreate)
-				gr.GET("/", h.interfaceList)
-
-				gr.WithGroup("/:ifaceID", func(gr *bunrouter.Group) {
-					gr.GET("", h.interfaceGet)
-					gr.GET("/metrics", h.serverInterfaceMetrics)
-					gr.GET("/metrics/history", h.serverInterfaceMetricsHistory)
-					gr.PUT("/config", h.interfaceConfigUpdate)
-					gr.POST("/force-replace-peers", h.interfaceForceReplacePeers)
-					gr.DELETE("", h.interfaceDelete)
-				})
-			})
+			gr.GET("/interfaces/:ifaceID/metrics", h.serverInterfaceMetrics)
+			gr.GET("/interfaces/:ifaceID/metrics/history", h.serverInterfaceMetricsHistory)
 		})
 	})
 

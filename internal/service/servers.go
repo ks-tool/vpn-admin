@@ -18,6 +18,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"strconv"
@@ -375,31 +376,30 @@ func issueAgentTLS(srv *models.Server) error {
 }
 
 func (s *Service) serverUDPPorts(id uuid.UUID) []uint16 {
-	var ports []uint16
-	ifaces, err := s.store.Servers().Interfaces(id).List()
+	resources, err := s.store.Resources(id).List()
 	if err != nil {
 		return nil
 	}
-	for i := range ifaces {
-		if ifaces[i].ListenPort > 0 {
-			ports = append(ports, ifaces[i].ListenPort)
+	var ports []uint16
+	for _, resource := range resources {
+		if resource.Kind != "Interface" {
+			continue
+		}
+		var spec struct {
+			Listen uint16 `json:"listen"`
+			Port   uint16 `json:"port"`
+		}
+		if json.Unmarshal(resource.Spec, &spec) == nil {
+			port := spec.Listen
+			if port == 0 {
+				port = spec.Port
+			}
+			if port > 0 {
+				ports = append(ports, port)
+			}
 		}
 	}
 	return ports
-}
-
-func (s *Service) serverInterfaceNames(id uuid.UUID) []string {
-	ifaces, err := s.store.Servers().Interfaces(id).List()
-	if err != nil {
-		return nil
-	}
-	names := make([]string, 0, len(ifaces))
-	for i := range ifaces {
-		if ifaces[i].Interface != "" {
-			names = append(names, ifaces[i].Interface)
-		}
-	}
-	return names
 }
 
 // DeployAgent starts installing and starting the vpn-agent service on the
@@ -497,16 +497,6 @@ func (s *Service) DeleteServer(id string) error {
 				if err := s.DeleteProviderResource(id, providerFromAPIVersion(item.APIVersion), item.Kind, item.Name); err != nil {
 					return err
 				}
-			}
-		}
-	}
-	// Refuse if any of the server's interfaces is part of a tunnel — the
-	// tunnel's other end lives on a different server, so it must be removed
-	// first (mirrors the per-interface delete guard in DeleteInterface).
-	if ifaces, e := s.store.Servers().Interfaces(sID).List(); e == nil {
-		for i := range ifaces {
-			if ifaces[i].Tunnel != nil {
-				return fmt.Errorf("server has interface %q that is part of a tunnel; remove the tunnel first", ifaces[i].Interface)
 			}
 		}
 	}

@@ -50,6 +50,14 @@ func (h *Handler) providerSchema(w http.ResponseWriter, r bunrouter.Request) err
 	return bunrouter.JSON(w, definition)
 }
 
+func (h *Handler) resourceList(w http.ResponseWriter, r bunrouter.Request) error {
+	resources, err := h.svc.ListResources(r.Param("serverID"))
+	if err != nil {
+		return handleErr(err, resourceFields(r))
+	}
+	return bunrouter.JSON(w, resources)
+}
+
 func (h *Handler) providerResourceList(w http.ResponseWriter, r bunrouter.Request) error {
 	resources, err := h.svc.ListProviderResources(r.Param("serverID"), r.Param("provider"))
 	if err != nil {

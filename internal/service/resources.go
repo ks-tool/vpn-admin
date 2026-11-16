@@ -195,11 +195,11 @@ func (s *Service) ListProviderResources(serverID, provider string) ([]models.Res
 			continue
 		}
 		if item.Status.Phase == models.ResourceDeleting {
-			if err := s.removeLegacyResource(serverID, item); err != nil {
-				return nil, err
-			}
 			id, _ := uuid.Parse(serverID)
 			if err := s.store.Resources(id).Delete(item.ID); err != nil {
+				return nil, err
+			}
+			if err := s.store.Secrets().Delete(item.ID); err != nil {
 				return nil, err
 			}
 			continue
@@ -213,7 +213,7 @@ func (s *Service) ListProviderResources(serverID, provider string) ([]models.Res
 		}); err != nil {
 			return nil, err
 		}
-		if err := s.restoreProviderResourceSecret(serverID, definition, item); err != nil {
+		if err := s.migrateProviderResourceSecret(serverID, definition, item); err != nil {
 			return nil, err
 		}
 		created.APIVersion = apiVersion
@@ -292,7 +292,7 @@ func (s *Service) waitProviderResourcesReady(serverID, provider string, resource
 }
 
 func (s *Service) PutProviderResource(serverID, provider, kind, name string, spec json.RawMessage) (*models.Resource, error) {
-	if name == "" || !json.Valid(spec) {
+	if len(name) == 0 || !json.Valid(spec) {
 		return nil, invalidInput("resource name and valid JSON spec are required")
 	}
 	definition, err := s.GetProviderSchema(serverID, provider)
@@ -309,6 +309,10 @@ func (s *Service) PutProviderResource(serverID, provider, kind, name string, spe
 	if resourceDefinition == nil {
 		return nil, invalidInput("resource kind is not supported by provider")
 	}
+	spec, err = s.applyPeerUserState(kind, spec)
+	if err != nil {
+		return nil, err
+	}
 	desired := models.Resource{ServerID: serverID, APIVersion: resourceDefinition.APIVersion, Kind: kind, Name: name, Spec: spec}
 	resources, err := s.ListProviderResources(serverID, provider)
 	if err != nil {
@@ -316,6 +320,9 @@ func (s *Service) PutProviderResource(serverID, provider, kind, name string, spe
 	}
 	for _, existing := range resources {
 		if existing.Kind == kind && existing.Name == name {
+			if err := validateInterfaceIdentity(existing, spec); err != nil {
+				return nil, err
+			}
 			desired.ID = existing.ID
 			desired.Generation = existing.Generation
 			break
@@ -417,11 +424,11 @@ func (s *Service) DeleteProviderResource(serverID, provider, kind, name string) 
 		time.Sleep(100 * time.Millisecond)
 	}
 	if selected != nil {
-		if err := s.removeLegacyResource(serverID, *selected); err != nil {
+		id, _ := uuid.Parse(serverID)
+		if err := s.store.Resources(id).Delete(selected.ID); err != nil {
 			return err
 		}
-		id, _ := uuid.Parse(serverID)
-		return s.store.Resources(id).Delete(selected.ID)
+		return s.store.Secrets().Delete(selected.ID)
 	}
 	return nil
 }
@@ -453,110 +460,38 @@ func (s *Service) restoreProviderResourceSecret(serverID string, definition *mod
 		}
 	}
 	if !actionAvailable {
-		return nil
+		return fmt.Errorf("provider %s does not support secret migration for %s", definition.Name, item.Kind)
 	}
-	if item.Kind == "Interface" {
-		serverUUID, err := uuid.Parse(serverID)
-		if err != nil {
-			return err
-		}
-		interfaceID, err := uuid.Parse(item.ID)
-		if err != nil {
-			return nil
-		}
-		iface, err := s.store.Servers().Interfaces(serverUUID).Get(interfaceID)
-		if err != nil {
-			return err
-		}
-		arguments, err := json.Marshal(map[string]any{
-			"privateKey": iface.PrivateKey.String(), "preUp": iface.PreUp, "postUp": iface.PostUp,
-			"preDown": iface.PreDown, "postDown": iface.PostDown,
-		})
-		if err != nil {
-			return err
-		}
-		_, err = s.RunProviderResourceAction(serverID, definition.Name, item.Kind, item.Name, "importSecret", arguments)
-		return err
+	secret, err := s.store.Secrets().Get(item.ID)
+	if storage.IsNotFound(err) {
+		return fmt.Errorf("migration secret for resource %s is missing", item.ID)
 	}
-
-	var spec struct {
-		UserRef      string `json:"userRef"`
-		InterfaceRef string `json:"interfaceRef"`
-		PublicKey    string `json:"publicKey"`
-	}
-	if err := json.Unmarshal(item.Spec, &spec); err != nil {
-		return err
-	}
-	if len(spec.UserRef) == 0 {
-		if definition.Name != "awg" {
-			return nil
-		}
-		serverUUID, err := uuid.Parse(serverID)
-		if err != nil {
-			return err
-		}
-		interfaceID, err := uuid.Parse(spec.InterfaceRef)
-		if err != nil {
-			return nil
-		}
-		iface, err := s.store.Servers().Interfaces(serverUUID).Get(interfaceID)
-		if storage.IsNotFound(err) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		for _, peer := range iface.Peers {
-			if peer.Key.String() != spec.PublicKey || peer.PresharedKey == nil {
-				continue
-			}
-			supported, err := s.peerSupportsPresharedOnlyImport(serverID)
-			if err != nil || !supported {
-				return err
-			}
-			raw, err := json.Marshal(map[string]string{"presharedKey": peer.PresharedKey.String()})
-			if err != nil {
-				return err
-			}
-			_, err = s.RunProviderResourceAction(serverID, definition.Name, item.Kind, item.Name, "importSecret", raw)
-			return err
-		}
-		return nil
-	}
-	userID, err := uuid.Parse(spec.UserRef)
-	if err != nil {
-		return nil
-	}
-	user, err := s.store.Users().Get(userID)
 	if err != nil {
 		return err
 	}
-	for _, peer := range user.Peers {
-		publicKey := peer.PrivateKey.PublicKey()
-		if publicKey.String() != spec.PublicKey {
-			continue
+	values := make(map[string]any)
+	if len(secret.PrivateKey) > 0 {
+		values["privateKey"] = secret.PrivateKey
+	}
+	if len(secret.PresharedKey) > 0 {
+		values["presharedKey"] = secret.PresharedKey
+	}
+	for field, hooks := range map[string][]string{"preUp": secret.PreUp, "postUp": secret.PostUp, "preDown": secret.PreDown, "postDown": secret.PostDown} {
+		if len(hooks) > 0 {
+			values[field] = hooks
 		}
-		arguments := map[string]string{"privateKey": peer.PrivateKey.String()}
-		if peer.InterfaceId != uuid.Nil() {
-			iface, _, err := s.getInterfaceByID(peer.InterfaceId)
-			if err != nil {
-				return err
-			}
-			for _, configured := range iface.Peers {
-				if configured.Key.String() == spec.PublicKey && configured.PresharedKey != nil {
-					arguments["presharedKey"] = configured.PresharedKey.String()
-					break
-				}
-			}
-		}
-		raw, err := json.Marshal(arguments)
-		if err != nil {
-			return err
-		}
-		_, err = s.RunProviderResourceAction(serverID, definition.Name, item.Kind, item.Name, "importSecret", raw)
+	}
+	if item.Kind == "Peer" && len(values) == 0 {
+		return s.store.Secrets().Delete(item.ID)
+	}
+	arguments, err := json.Marshal(values)
+	if err != nil {
 		return err
 	}
-	return errors.New("legacy peer secret was not found")
+	if _, err := s.RunProviderResourceAction(serverID, definition.Name, item.Kind, item.Name, "importSecret", arguments); err != nil {
+		return err
+	}
+	return s.store.Secrets().Delete(item.ID)
 }
 
 func (s *Service) localProviderResources(serverID string) ([]models.Resource, error) {
@@ -573,9 +508,6 @@ func (s *Service) saveProviderResource(serverID string, resource models.Resource
 		return invalidInput("invalid server id")
 	}
 	resource.ServerID = serverID
-	if err := s.syncLegacyResource(serverID, resource); err != nil {
-		return err
-	}
 	return s.store.Resources(id).Set(&resource)
 }
 
@@ -602,19 +534,7 @@ func (s *Service) RunProviderResourceAction(serverID, provider, kind, name, acti
 		result, err = client.RunResourceAction(ctx, provider, kind, name, action, arguments)
 		return err
 	})
-	if err != nil || action != "rotateKeys" {
-		return result, err
-	}
-	resources, listErr := s.localProviderResources(serverID)
-	if listErr != nil {
-		return result, listErr
-	}
-	for _, item := range resources {
-		if item.Kind == kind && item.Name == name {
-			return result, s.removeLegacyResource(serverID, item)
-		}
-	}
-	return result, nil
+	return result, err
 }
 
 func (s *Service) withAgent(serverID string, operation func(context.Context, *agentclient.Client) error) error {

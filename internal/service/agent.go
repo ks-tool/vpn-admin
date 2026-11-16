@@ -68,10 +68,9 @@ func (s *Service) agentClientFor(srv *models.Server) (*agentclient.Client, *sshc
 // briefly lag a connection that has just died (agent host rebooted, sshd
 // restarted, network dropped the session). In that window agentClientFor →
 // Manager.Ensure hands back a tunnel whose very next request fails with a bare
-// io.EOF from the dead SSH mux — surfacing as e.g.
-// `PUT /interfaces: Put "http://127.0.0.1:8080/interfaces": EOF` — instead of
-// being transparently reconnected. Every mutation routed through here
-// (PUT/DELETE /interfaces, PATCH /metrics) is idempotent, so we recover by
+// io.EOF from the dead SSH mux instead of being transparently reconnected.
+// Every mutation routed through here (resource PUT/DELETE and settings PATCH)
+// is idempotent, so we recover by
 // forcing a fresh dial (Manager.Open, which closes the stale tunnel first) and
 // retrying once; by then Alive() has flipped and Ensure yields a live tunnel.
 //
@@ -178,7 +177,7 @@ func tunnelDroppedHard(err error) bool {
 
 // pingAgent confirms srv's agent HTTP daemon actually answers, used by
 // ServerAgentStatus. The provider-neutral manifest endpoint works whether or
-// not the legacy AWG API is configured and has no metrics-collector dependency.
+// is available and has no metrics-collector dependency.
 func (s *Service) pingAgent(srv *models.Server) error {
 	return s.callAgent(srv, func(ctx context.Context, c *agentclient.Client) error {
 		_, err := c.Manifest(ctx)
@@ -237,12 +236,8 @@ func (s *Service) GetServerMetrics(serverID string) (*agentmodels.SystemSnapshot
 	return snap, nil
 }
 
-func (s *Service) serverAndInterface(serverID, interfaceID string) (*models.Server, *models.Interface, error) {
+func (s *Service) serverAndInterface(serverID, interfaceID string) (*models.Server, *models.Resource, error) {
 	sID, err := uuid.Parse(serverID)
-	if err != nil {
-		return nil, nil, err
-	}
-	ifaceID, err := uuid.Parse(interfaceID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -250,7 +245,10 @@ func (s *Service) serverAndInterface(serverID, interfaceID string) (*models.Serv
 	if err != nil {
 		return nil, nil, err
 	}
-	iface, err := s.store.Servers().Interfaces(sID).Get(ifaceID)
+	iface, err := s.store.Resources(sID).Get(interfaceID)
+	if err == nil && iface.Kind != "Interface" {
+		return nil, nil, invalidInput("resource %q is not an interface", interfaceID)
+	}
 	return srv, iface, err
 }
 
@@ -262,7 +260,7 @@ func (s *Service) GetServerInterfaceMetrics(serverID, interfaceID string) (*awgm
 	var snap *awgmodels.InterfaceSnapshot
 	err = s.callAgent(srv, func(ctx context.Context, c *agentclient.Client) error {
 		var mErr error
-		snap, mErr = c.InterfaceMetrics(ctx, iface.Interface)
+		snap, mErr = c.InterfaceMetrics(ctx, iface.Name)
 		return mErr
 	})
 	return snap, err
@@ -276,7 +274,7 @@ func (s *Service) GetServerInterfaceMetricsHistory(serverID, interfaceID string)
 	var history *awgmodels.InterfaceHistory
 	err = s.callAgent(srv, func(ctx context.Context, c *agentclient.Client) error {
 		var mErr error
-		history, mErr = c.InterfaceMetricsHistory(ctx, iface.Interface)
+		history, mErr = c.InterfaceMetricsHistory(ctx, iface.Name)
 		return mErr
 	})
 	return history, err

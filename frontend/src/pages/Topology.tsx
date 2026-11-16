@@ -16,20 +16,7 @@
 
 import {useCallback, useEffect, useMemo, useState} from 'react';
 import {useTranslation} from 'react-i18next';
-import {
-    Background,
-    ConnectionMode,
-    Controls,
-    MarkerType,
-    MiniMap,
-    ReactFlow,
-    useEdgesState,
-    useNodesState,
-    type Connection,
-    type Edge,
-    type Node,
-    type NodeTypes,
-} from '@xyflow/react';
+import {Background, ConnectionMode, Controls, MarkerType, MiniMap, ReactFlow, useEdgesState, useNodesState, type Connection, type Edge, type Node, type NodeTypes} from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {ArrowRight, Map as MapIcon, Plus, Settings as SettingsIcon, Share2, Users as UsersIcon} from 'lucide-react';
 import {toast} from 'sonner';
@@ -46,23 +33,15 @@ import {AddServerModal} from '@/components/topology/TopologyModals';
 import {TopologyInspector, type TopologySelection} from '@/components/topology/TopologyInspector';
 import {TopologyMap} from '@/components/topology/TopologyMap';
 import {TopologyInterfaceNode, type InterfaceFlowNode} from '@/components/topology/TopologyNodes';
-import {canCreateTopologyConnection, mergeProviderLinks} from '@/components/topology/connections';
-import {
-    createNetworkConnection,
-    deleteNetworkConnection,
-    getTopology,
-    getTunnelMetrics,
-    listVPNPlugins,
-    moveNetworkConnection,
-    moveTopologyNodes,
-} from '@/services/topology';
+import {canCreateTopologyConnection, providerConnections} from '@/components/topology/connections';
+import {getTopology, getTunnelMetrics, moveTopologyNodes} from '@/services/topology';
 import {createProviderLink, deleteProviderLink, listProviderLinks, moveProviderLink} from '@/services/resources';
 import {getServerAgentStatus, type AgentStatus} from '@/services/servers';
 import {useAppStore} from '@/store';
 import {useAutoRefresh} from '@/hooks/useAutoRefresh';
-import type {PluginDescriptor, ProviderLink, Topology as TopologyData, TunnelMetric} from '@/types';
+import type {ProviderLink, Topology as TopologyData, TunnelMetric} from '@/types';
 
-const emptyTopology: TopologyData = {servers: [], interfaces: [], services: [], connections: []};
+const emptyTopology: TopologyData = {servers: [], interfaces: []};
 const nodeTypes: NodeTypes = {interface: TopologyInterfaceNode};
 type TopologyNode = InterfaceFlowNode;
 type TopologyView = 'map' | 'graph' | 'users' | 'settings';
@@ -73,7 +52,6 @@ export default function Topology() {
     const users = useAppStore(state => state.users);
     const refreshData = useAppStore(state => state.refreshData);
     const [topology, setTopology] = useState<TopologyData>(emptyTopology);
-    const [plugins, setPlugins] = useState<PluginDescriptor[]>([]);
     const [links, setLinks] = useState<ProviderLink[]>([]);
     const [agentStatuses, setAgentStatuses] = useState<Record<string, AgentStatus | null>>({});
     const [tunnelMetrics, setTunnelMetrics] = useState<Record<string, TunnelMetric>>({});
@@ -105,16 +83,10 @@ export default function Topology() {
         } else if (page === 'user-detail') {
             setUserView('detail');
             setView('users');
-        } else if (page === 'settings') {
-            setView('settings');
-        }
+        } else if (page === 'settings') setView('settings');
     }, []);
-
     const refreshAgentStatuses = useCallback(async (servers: TopologyData['servers']) => {
-        const entries = await Promise.all(servers.map(async server => [
-            server.id,
-            await getServerAgentStatus(server.id),
-        ] as const));
+        const entries = await Promise.all(servers.map(async server => [server.id, await getServerAgentStatus(server.id)] as const));
         setAgentStatuses(previous => ({...previous, ...Object.fromEntries(entries)}));
     }, []);
     const refresh = useCallback(async () => {
@@ -134,44 +106,22 @@ export default function Topology() {
             console.error('Failed to refresh tunnel metrics:', error);
         }
     }, []));
-
     useEffect(() => {
-        void Promise.all([getTopology(), listVPNPlugins(), listProviderLinks()]).then(([topologyData, pluginData, providerLinks]) => {
-            setTopology(topologyData);
-            setPlugins(pluginData);
+        void Promise.all([getTopology(), listProviderLinks()]).then(([data, providerLinks]) => {
+            setTopology(data);
             setLinks(providerLinks ?? []);
-            void refreshAgentStatuses(topologyData.servers);
-        }).catch(error => {
-            toast.error(error instanceof Error ? error.message : t('topology.loadError'));
-        }).finally(() => setLoading(false));
+            void refreshAgentStatuses(data.servers);
+        }).catch(error => toast.error(error instanceof Error ? error.message : t('topology.loadError'))).finally(() => setLoading(false));
     }, [refreshAgentStatuses, t]);
 
-    const selectService = useCallback((id: string) => setSelection({kind: 'service', id}), []);
-
-    const graphNodes = useMemo<TopologyNode[]>(() => topology.interfaces.map(iface => ({
-        id: iface.id,
-        type: 'interface',
-        position: {x: iface.x, y: iface.y},
-        data: {
-            iface,
-            server: topology.servers.find(server => server.id === iface.serverId),
-            service: topology.services.find(service => service.id === iface.serviceId),
-        },
-    })), [topology]);
-
+    const graphNodes = useMemo<TopologyNode[]>(() => topology.interfaces.map(iface => ({id: iface.id, type: 'interface', position: {x: iface.x, y: iface.y}, data: {iface, server: topology.servers.find(server => server.id === iface.serverId)}})), [topology]);
     useEffect(() => setNodes(graphNodes), [graphNodes, setNodes]);
-    const graphConnections = useMemo(() => mergeProviderLinks(topology.connections, links), [topology.connections, links]);
+    const graphConnections = useMemo(() => providerConnections(links), [links]);
     useEffect(() => {
-        setEdges(graphConnections.map(connection => ({
-            id: connection.id,
-            source: connection.sourceId,
-            target: connection.targetId,
-            markerEnd: {type: MarkerType.ArrowClosed, color: '#0ea5e9'},
-            style: {stroke: '#0ea5e9', strokeWidth: 2},
-        })));
+        setEdges(graphConnections.map(connection => ({id: connection.id, source: connection.sourceId, target: connection.targetId, markerEnd: {type: MarkerType.ArrowClosed, color: '#0ea5e9'}, style: {stroke: '#0ea5e9', strokeWidth: 2}})));
     }, [graphConnections, setEdges]);
 
-    const selectedConnection = edges.find(edge => edge.selected && !edge.id.startsWith('tunnel:'));
+    const selectedConnection = edges.find(edge => edge.selected);
     const canConnect = useCallback((connection: {source: string | null; target: string | null}) => {
         if (!connection.source || !connection.target) return false;
         return canCreateTopologyConnection(graphConnections, connection.source, connection.target);
@@ -180,9 +130,7 @@ export default function Topology() {
         if (!connection.source || !connection.target) return false;
         return canCreateTopologyConnection(graphConnections.filter(item => item.id !== edge.id), connection.source, connection.target);
     }, [graphConnections]);
-    const isValidConnection = useCallback((connection: {source: string | null; target: string | null}) => {
-        return moveMode && selectedConnection ? canMoveConnection(connection, selectedConnection) : canConnect(connection);
-    }, [canConnect, canMoveConnection, moveMode, selectedConnection]);
+    const isValidConnection = useCallback((connection: {source: string | null; target: string | null}) => moveMode && selectedConnection ? canMoveConnection(connection, selectedConnection) : canConnect(connection), [canConnect, canMoveConnection, moveMode, selectedConnection]);
     const handleConnect = useCallback((connection: Connection) => {
         if (!connection.source || !connection.target) return;
         if (!canConnect(connection)) {
@@ -195,18 +143,7 @@ export default function Topology() {
         if (!connectionToCreate) return;
         setCreatingConnection(true);
         try {
-            if (!canConnect(connectionToCreate)) {
-                toast.error(t('topology.connectionCycle'));
-                setConnectionToCreate(null);
-                return;
-            }
-            const source = topology.interfaces.find(item => item.id === connectionToCreate.source);
-            const target = topology.interfaces.find(item => item.id === connectionToCreate.target);
-            if (source?.legacy && target?.legacy) {
-                await createProviderLink(source.id, target.id);
-            } else {
-                await createNetworkConnection(connectionToCreate.source, connectionToCreate.target);
-            }
+            await createProviderLink(connectionToCreate.source, connectionToCreate.target);
             await refresh();
             setConnectionToCreate(null);
             toast.success(t('topology.connectionCreated'));
@@ -215,7 +152,7 @@ export default function Topology() {
         } finally {
             setCreatingConnection(false);
         }
-    }, [canConnect, connectionToCreate, refresh, t, topology.interfaces]);
+    }, [connectionToCreate, refresh, t]);
     const handleReconnect = useCallback((edge: Edge, connection: Connection) => {
         if (!moveMode || selectedConnection?.id !== edge.id || !connection.source || !connection.target) return;
         setMoveMode(false);
@@ -230,16 +167,7 @@ export default function Topology() {
         if (!connectionToMove) return;
         setMovingConnection(true);
         try {
-            if (!canMoveConnection(connectionToMove, connectionToMove.edge)) {
-                toast.error(t('topology.connectionCycle'));
-                setConnectionToMove(null);
-                return;
-            }
-            if (connectionToMove.edge.id.startsWith('link:')) {
-                await moveProviderLink(connectionToMove.edge.id.slice(5), connectionToMove.source, connectionToMove.target);
-            } else {
-                await moveNetworkConnection(connectionToMove.edge.id, connectionToMove.source, connectionToMove.target);
-            }
+            await moveProviderLink(connectionToMove.edge.id.slice(5), connectionToMove.source, connectionToMove.target);
             await refresh();
             setConnectionToMove(null);
             toast.success(t('topology.connectionMoved'));
@@ -248,14 +176,13 @@ export default function Topology() {
         } finally {
             setMovingConnection(false);
         }
-    }, [canMoveConnection, connectionToMove, refresh, t]);
+    }, [connectionToMove, refresh, t]);
     const connectionLabel = useCallback((id: string) => {
         const iface = topology.interfaces.find(item => item.id === id);
         const server = topology.servers.find(item => item.id === iface?.serverId);
         if (!iface) return id;
         return `${server ? `${server.name}[${server.address || '—'}]` : '—'} / ${iface.name}`;
     }, [topology.interfaces, topology.servers]);
-
     useEffect(() => {
         if (view !== 'graph' || connectionToCreate || connectionToMove || connectionToDelete) return;
         const handleKeyDown = (event: KeyboardEvent) => {
@@ -282,11 +209,7 @@ export default function Topology() {
         if (!connectionToDelete) return;
         setDeletingConnection(true);
         try {
-            if (connectionToDelete.id.startsWith('link:')) {
-                await deleteProviderLink(connectionToDelete.id.slice(5));
-            } else {
-                await deleteNetworkConnection(connectionToDelete.id);
-            }
+            await deleteProviderLink(connectionToDelete.id.slice(5));
             await refresh();
             setConnectionToDelete(null);
             toast.success(t('topology.deleted'));
@@ -299,167 +222,36 @@ export default function Topology() {
 
     return (
         <NavigationProvider navigate={navigate}>
-        <div className="flex h-screen flex-col overflow-hidden">
-            <div className="relative flex min-h-0 flex-1 overflow-hidden">
-                <div className="relative min-w-0 flex-1 bg-muted/20">
-                    <div className="absolute right-4 top-4 z-30 flex rounded-lg border border-border bg-card/90 p-1 shadow-sm backdrop-blur" aria-label={t('topology.view')}>
-                        <button
-                            type="button"
-                            onClick={() => view === 'users' ? navigate('add-user') : setServerModal(true)}
-                            disabled={view === 'settings'}
-                            className="mr-1 rounded-md bg-sky-600 p-2 text-white shadow-sm transition-colors hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-sky-600"
-                            title={view === 'users' ? t('users.addUser') : t('topology.addServer')}
-                            aria-label={view === 'users' ? t('users.addUser') : t('topology.addServer')}
-                        >
-                            <Plus size={16} />
-                        </button>
-                        <button type="button" onClick={() => setView('map')} aria-pressed={view === 'map'} title={t('topology.mapView')} className={`rounded-md p-2 ${view === 'map' ? 'bg-card text-sky-600 shadow-sm dark:text-sky-400' : 'text-muted-foreground'}`}><MapIcon size={16} /></button>
-                        <button type="button" onClick={() => setView('graph')} aria-pressed={view === 'graph'} title={t('topology.graphView')} className={`rounded-md p-2 ${view === 'graph' ? 'bg-card text-sky-600 shadow-sm dark:text-sky-400' : 'text-muted-foreground'}`}><Share2 size={16} /></button>
-                        <button type="button" onClick={() => navigate('users')} aria-pressed={view === 'users'} title={t('nav.users')} aria-label={t('nav.users')} className={`rounded-md p-2 ${view === 'users' ? 'bg-card text-sky-600 shadow-sm dark:text-sky-400' : 'text-muted-foreground'}`}><UsersIcon size={16} /></button>
-                        <button type="button" onClick={() => navigate('settings')} aria-pressed={view === 'settings'} title={t('nav.settings')} aria-label={t('nav.settings')} className={`rounded-md p-2 ${view === 'settings' ? 'bg-card text-sky-600 shadow-sm dark:text-sky-400' : 'text-muted-foreground'}`}><SettingsIcon size={16} /></button>
+            <div className="flex h-screen flex-col overflow-hidden">
+                <div className="relative flex min-h-0 flex-1 overflow-hidden">
+                    <div className="relative min-w-0 flex-1 bg-muted/20">
+                        <div className="absolute right-4 top-4 z-30 flex rounded-lg border border-border bg-card/90 p-1 shadow-sm backdrop-blur" aria-label={t('topology.view')}>
+                            <button type="button" onClick={() => view === 'users' ? navigate('add-user') : setServerModal(true)} disabled={view === 'settings'} className="mr-1 rounded-md bg-sky-600 p-2 text-white shadow-sm hover:bg-sky-500 disabled:opacity-40" title={view === 'users' ? t('users.addUser') : t('topology.addServer')}><Plus size={16} /></button>
+                            <button type="button" onClick={() => setView('map')} aria-pressed={view === 'map'} title={t('topology.mapView')} className={`rounded-md p-2 ${view === 'map' ? 'bg-card text-sky-600 shadow-sm' : 'text-muted-foreground'}`}><MapIcon size={16} /></button>
+                            <button type="button" onClick={() => setView('graph')} aria-pressed={view === 'graph'} title={t('topology.graphView')} className={`rounded-md p-2 ${view === 'graph' ? 'bg-card text-sky-600 shadow-sm' : 'text-muted-foreground'}`}><Share2 size={16} /></button>
+                            <button type="button" onClick={() => navigate('users')} aria-pressed={view === 'users'} title={t('nav.users')} className={`rounded-md p-2 ${view === 'users' ? 'bg-card text-sky-600 shadow-sm' : 'text-muted-foreground'}`}><UsersIcon size={16} /></button>
+                            <button type="button" onClick={() => navigate('settings')} aria-pressed={view === 'settings'} title={t('nav.settings')} className={`rounded-md p-2 ${view === 'settings' ? 'bg-card text-sky-600 shadow-sm' : 'text-muted-foreground'}`}><SettingsIcon size={16} /></button>
+                        </div>
+                        {(view === 'map' || view === 'graph') && loading && <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/60 text-sm text-muted-foreground">{t('common.loading')}</div>}
+                        {(view === 'map' || view === 'graph') && !loading && topology.servers.length === 0 && <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center"><div className="max-w-sm rounded-xl border border-border bg-card p-6 text-center shadow-lg"><Share2 className="mx-auto mb-3 text-sky-500" size={32} /><h2 className="font-semibold">{t('topology.emptyTitle')}</h2><p className="mt-2 text-sm text-muted-foreground">{t('topology.emptyHint')}</p></div></div>}
+                        {view === 'users' || view === 'settings' ? <div className="h-full overflow-y-auto pt-14">{view === 'settings' ? <Settings /> : userView === 'detail' ? <UserDetail /> : <Users />}</div> : view === 'graph' ? (
+                            <>
+                                <ReactFlow<TopologyNode, Edge> nodes={nodes} edges={edges} nodeTypes={nodeTypes} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={handleConnect} onReconnect={handleReconnect} edgesReconnectable={moveMode && !!selectedConnection && !connectionToMove} connectionMode={ConnectionMode.Strict} isValidConnection={isValidConnection} onNodeDragStop={(_, node: Node) => void moveTopologyNodes([{id: node.id, x: node.position.x, y: node.position.y}]).catch(error => toast.error(error instanceof Error ? error.message : t('topology.saveError')))} onPaneClick={() => {setSelection(null); setMoveMode(false);}} deleteKeyCode={null} fitView minZoom={0.25} maxZoom={1.75} proOptions={{hideAttribution: false}}>
+                                    <Background gap={20} /><Controls /><MiniMap pannable zoomable />
+                                </ReactFlow>
+                                <div className={`pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border px-4 py-2 text-center text-xs shadow-sm ${moveMode ? 'border-sky-500 bg-sky-500/10 text-sky-600' : 'border-border bg-card/95 text-muted-foreground'}`}>{t(moveMode ? 'topology.moveCanvasHint' : 'topology.canvasHint')}</div>
+                            </>
+                        ) : <TopologyMap servers={topology.servers} interfaces={topology.interfaces} links={links} agentStatuses={agentStatuses} tunnelMetrics={tunnelMetrics} totalUsers={users.length} onSelect={setMetricsModalServerId} />}
                     </div>
-                    {(view === 'map' || view === 'graph') && loading && <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/60 text-sm text-muted-foreground">{t('common.loading')}</div>}
-                    {(view === 'map' || view === 'graph') && !loading && topology.servers.length === 0 && (
-                        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
-                            <div className="max-w-sm rounded-xl border border-border bg-card p-6 text-center shadow-lg">
-                                <Share2 className="mx-auto mb-3 text-sky-500" size={32} />
-                                <h2 className="font-semibold">{t('topology.emptyTitle')}</h2>
-                                <p className="mt-2 text-sm text-muted-foreground">{t('topology.emptyHint')}</p>
-                            </div>
-                        </div>
-                    )}
-                    {view === 'users' || view === 'settings' ? (
-                        <div className="h-full overflow-y-auto pt-14">
-                            {view === 'settings' ? <Settings /> : userView === 'detail' ? <UserDetail /> : <Users />}
-                        </div>
-                    ) : view === 'graph' ? (
-                        <>
-                            <ReactFlow<TopologyNode, Edge>
-                                nodes={nodes}
-                                edges={edges}
-                                nodeTypes={nodeTypes}
-                                onNodesChange={onNodesChange}
-                                onEdgesChange={onEdgesChange}
-                                onConnect={handleConnect}
-                                onReconnect={handleReconnect}
-                                edgesReconnectable={moveMode && !!selectedConnection && !connectionToMove}
-                                connectionMode={ConnectionMode.Strict}
-                                isValidConnection={isValidConnection}
-                                onNodeDragStop={(_, node: Node) => {
-                                    void moveTopologyNodes([{id: node.id, x: node.position.x, y: node.position.y}]).catch(error => {
-                                        toast.error(error instanceof Error ? error.message : t('topology.saveError'));
-                                    });
-                                }}
-                                onPaneClick={() => {
-                                    setSelection(null);
-                                    setMoveMode(false);
-                                }}
-                                deleteKeyCode={null}
-                                fitView
-                                minZoom={0.25}
-                                maxZoom={1.75}
-                                proOptions={{hideAttribution: false}}
-                            >
-                                <Background gap={20} />
-                                <Controls />
-                                <MiniMap pannable zoomable />
-                            </ReactFlow>
-                            <div className={`pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border px-4 py-2 text-center text-xs shadow-sm ${moveMode ? 'border-sky-500 bg-sky-500/10 text-sky-600 dark:text-sky-400' : 'border-border bg-card/95 text-muted-foreground'}`}>
-                                {t(moveMode ? 'topology.moveCanvasHint' : 'topology.canvasHint')}
-                            </div>
-                        </>
-                    ) : (
-                        <TopologyMap
-                            servers={topology.servers}
-                            interfaces={topology.interfaces}
-                            services={topology.services}
-                            connections={topology.connections}
-                            links={links}
-                            agentStatuses={agentStatuses}
-                            tunnelMetrics={tunnelMetrics}
-                            totalUsers={users.length}
-                            onSelect={setMetricsModalServerId}
-                        />
-                    )}
+                    {selection && (view === 'map' || view === 'graph') && <TopologyInspector selection={selection} topology={topology} onClose={() => setSelection(null)} refresh={refresh} />}
                 </div>
-                {selection && (view === 'map' || view === 'graph') && (
-                    <TopologyInspector
-                        selection={selection}
-                        topology={topology}
-                        plugins={plugins}
-                        onClose={() => setSelection(null)}
-                        onSelectService={selectService}
-                        refresh={refresh}
-                    />
-                )}
+                {connectionToCreate && <Modal title={t('topology.createConnection')} onClose={() => setConnectionToCreate(null)} loading={creatingConnection}><p className="mb-4 text-sm text-muted-foreground">{t('topology.confirmCreateConnection')}</p><div className="mb-6 flex items-center gap-3 rounded-lg bg-muted p-4 text-sm"><span className="min-w-0 flex-1 break-words">{connectionLabel(connectionToCreate.source)}</span><ArrowRight size={20} /><span className="min-w-0 flex-1 break-words text-right">{connectionLabel(connectionToCreate.target)}</span></div><div className="flex justify-end gap-2"><button type="button" onClick={() => setConnectionToCreate(null)} className={buttons.secondary}>{t('common.cancel')}</button><button type="button" onClick={() => void confirmCreateConnection()} disabled={creatingConnection} className={buttons.primary}>{t('common.create')}</button></div></Modal>}
+                {connectionToMove && <Modal title={t('topology.moveConnection')} onClose={() => setConnectionToMove(null)} loading={movingConnection}><p className="mb-4 text-sm text-muted-foreground">{t('topology.confirmMoveConnection')}</p><div className="mb-6 rounded-lg bg-muted p-4 text-sm">{connectionLabel(connectionToMove.source)} → {connectionLabel(connectionToMove.target)}</div><div className="flex justify-end gap-2"><button type="button" onClick={() => setConnectionToMove(null)} className={buttons.secondary}>{t('common.cancel')}</button><button type="button" onClick={() => void confirmMoveConnection()} disabled={movingConnection} className={buttons.primary}>{t('common.save')}</button></div></Modal>}
+                {connectionToDelete && <ConfirmModal title={t('topology.deleteConnection')} message={t('topology.confirmDeleteConnection', {source: connectionLabel(connectionToDelete.source), target: connectionLabel(connectionToDelete.target)})} onConfirm={() => void confirmDeleteConnection()} onCancel={() => setConnectionToDelete(null)} loading={deletingConnection} />}
+                {metricsModalServerId && <ServerMetricsModal serverId={metricsModalServerId} serverName={topology.servers.find(server => server.id === metricsModalServerId)?.name ?? ''} onChanged={refresh} onClose={() => setMetricsModalServerId(null)} />}
+                {addUserModal && <AddUser onClose={() => setAddUserModal(false)} />}
+                {serverModal && <AddServerModal onClose={() => setServerModal(false)} onCreated={data => {setTopology(data); setServerModal(false); const server = data.servers[data.servers.length - 1]; if (server) setSelection({kind: 'server', id: server.id}); void refresh();}} />}
             </div>
-            {connectionToCreate && (
-                <Modal title={t('topology.createConnection')} onClose={() => setConnectionToCreate(null)} loading={creatingConnection}>
-                    <p className="mb-4 text-sm text-muted-foreground">{t('topology.confirmCreateConnection')}</p>
-                    <div className="mb-6 flex items-center gap-3 rounded-lg bg-muted p-4 text-sm">
-                        <span className="min-w-0 flex-1 break-words">{connectionLabel(connectionToCreate.source)}</span>
-                        <ArrowRight className="shrink-0 text-sky-500" size={20} />
-                        <span className="min-w-0 flex-1 break-words text-right">{connectionLabel(connectionToCreate.target)}</span>
-                    </div>
-                    <div className="flex justify-end gap-2">
-                        <button type="button" onClick={() => setConnectionToCreate(null)} disabled={creatingConnection} className={buttons.secondary}>{t('common.cancel')}</button>
-                        <button type="button" onClick={() => void confirmCreateConnection()} disabled={creatingConnection} className={buttons.primary}>{t('common.create')}</button>
-                    </div>
-                </Modal>
-            )}
-            {connectionToMove && (
-                <Modal title={t('topology.moveConnection')} onClose={() => setConnectionToMove(null)} loading={movingConnection}>
-                    <p className="mb-4 text-sm text-muted-foreground">{t('topology.confirmMoveConnection')}</p>
-                    <div className="mb-3 flex items-center gap-3 rounded-lg bg-muted/60 p-3 text-xs text-muted-foreground">
-                        <span className="min-w-0 flex-1 break-words">{connectionLabel(connectionToMove.edge.source)}</span>
-                        <ArrowRight className="shrink-0" size={16} />
-                        <span className="min-w-0 flex-1 break-words text-right">{connectionLabel(connectionToMove.edge.target)}</span>
-                    </div>
-                    <div className="mb-6 flex items-center gap-3 rounded-lg bg-muted p-4 text-sm">
-                        <span className="min-w-0 flex-1 break-words">{connectionLabel(connectionToMove.source)}</span>
-                        <ArrowRight className="shrink-0 text-sky-500" size={20} />
-                        <span className="min-w-0 flex-1 break-words text-right">{connectionLabel(connectionToMove.target)}</span>
-                    </div>
-                    <div className="flex justify-end gap-2">
-                        <button type="button" onClick={() => setConnectionToMove(null)} disabled={movingConnection} className={buttons.secondary}>{t('common.cancel')}</button>
-                        <button type="button" onClick={() => void confirmMoveConnection()} disabled={movingConnection} className={buttons.primary}>{t('common.create')}</button>
-                    </div>
-                </Modal>
-            )}
-            {connectionToDelete && (
-                <ConfirmModal
-                    title={t('topology.deleteConnection')}
-                    message={t('topology.confirmDeleteConnection', {
-                        source: connectionLabel(connectionToDelete.source),
-                        target: connectionLabel(connectionToDelete.target),
-                    })}
-                    onConfirm={() => void confirmDeleteConnection()}
-                    onCancel={() => setConnectionToDelete(null)}
-                    loading={deletingConnection}
-                />
-            )}
-            {metricsModalServerId && (
-                <ServerMetricsModal
-                    serverId={metricsModalServerId}
-                    serverName={topology.servers.find(server => server.id === metricsModalServerId)?.name ?? ''}
-                    onChanged={refresh}
-                    onClose={() => setMetricsModalServerId(null)}
-                />
-            )}
-            {addUserModal && <AddUser onClose={() => setAddUserModal(false)} />}
-            {serverModal && (
-                <AddServerModal
-                    onClose={() => setServerModal(false)}
-                    onCreated={data => {
-                        setTopology(data);
-                        setServerModal(false);
-                        const server = data.servers[data.servers.length - 1];
-                        if (server) setSelection({kind: 'server', id: server.id});
-                        void refresh();
-                    }}
-                />
-            )}
-        </div>
         </NavigationProvider>
     );
 }

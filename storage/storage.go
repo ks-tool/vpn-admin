@@ -18,10 +18,7 @@ package storage
 
 import (
 	"io"
-	"net"
 	"uuid"
-
-	awgmodels "github.com/ks-tool/vpn-agent/v2/providers/awg/models"
 
 	"github.com/ks-tool/vpn-admin/models"
 )
@@ -37,13 +34,10 @@ type Storage interface {
 	Resources(serverID uuid.UUID) Resources
 	Links() Links
 	Providers() Providers
-	// Backup writes a consistent, restorable snapshot of the entire store to
-	// w (see storage/boltdb/dump — the same format as the awg-migrate CLI).
+	Secrets() Secrets
 	Backup(w io.Writer) error
 }
 
-// AgentSources holds the named, reusable agent-binary deploy presets (see
-// models.AgentSource) — a flat collection, not scoped to any one server.
 type AgentSources interface {
 	List() ([]models.AgentSource, error)
 	Get(id uuid.UUID) (*models.AgentSource, error)
@@ -51,8 +45,6 @@ type AgentSources interface {
 	Delete(id uuid.UUID) error
 }
 
-// RegistrySources holds reusable private OCI registry connections shared by
-// agent and provider deployment.
 type RegistrySources interface {
 	List() ([]models.RegistrySource, error)
 	Get(id uuid.UUID) (*models.RegistrySource, error)
@@ -60,12 +52,15 @@ type RegistrySources interface {
 	Delete(id uuid.UUID) error
 }
 
-// Auth holds the single admin account used by the standalone web-server's
-// login flow (see internal/api). Not a collection like Users/Servers —
-// there's exactly one record.
 type Auth interface {
 	Get() (*models.AuthCredentials, error)
 	Set(creds *models.AuthCredentials) error
+}
+
+type Secrets interface {
+	Get(resourceID string) (*models.ResourceSecret, error)
+	Set(secret *models.ResourceSecret) error
+	Delete(resourceID string) error
 }
 
 type Servers interface {
@@ -73,33 +68,6 @@ type Servers interface {
 	Get(id uuid.UUID) (*models.Server, error)
 	Set(srv *models.Server) error
 	Delete(id uuid.UUID) error
-	Interfaces(serverID uuid.UUID) Interfaces
-}
-
-type Interfaces interface {
-	List() ([]models.Interface, error)
-	Get(id uuid.UUID) (*models.Interface, error)
-	Set(iface *models.Interface) error
-	Delete(id uuid.UUID) error
-	UsedIPs(ifaceID uuid.UUID) ([]net.IPNet, error)
-	// Import creates iface — keeping its Peers list exactly as given, unlike Set
-	// which wipes peers on create — together with the user-side peer records in
-	// peers, all in ONE transaction: users are matched by exact name (created
-	// when missing) and each peer is attached to the matching user with its
-	// InterfaceId set to iface.ID. Nothing is written if any step fails. This is
-	// the wg-quick import's write path (see internal/service PreviewImport /
-	// ImportInterfaceFromServer); the caller has already validated that every
-	// peer in peers has a matching entry in iface.Peers.
-	Import(iface *models.Interface, peers []ImportPeer) error
-}
-
-// ImportPeer is one user-owned peer to create by Interfaces.Import: the name
-// of the user it belongs to (matched exactly; created if absent) and the peer
-// record itself. Peer.InterfaceId is overwritten with the imported interface's
-// ID.
-type ImportPeer struct {
-	UserName string
-	Peer     models.Peer
 }
 
 type Users interface {
@@ -107,12 +75,4 @@ type Users interface {
 	Get(id uuid.UUID) (*models.User, error)
 	Set(user *models.User) error
 	Delete(id uuid.UUID) error
-	Peers(userID uuid.UUID) Peers
-}
-
-type Peers interface {
-	List() ([]models.Peer, error)
-	Get(publicKey awgmodels.Key) (*models.Peer, error)
-	Set(peer *models.Peer) error
-	Delete(publicKey awgmodels.Key) error
 }

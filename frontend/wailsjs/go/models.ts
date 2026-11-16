@@ -332,354 +332,6 @@ export namespace models {
 	        this.arch = source["arch"];
 	    }
 	}
-	export class ImportPreviewHooks {
-	    preUp?: string[];
-	    postUp?: string[];
-	    preDown?: string[];
-	    postDown?: string[];
-	
-	    static createFrom(source: any = {}) {
-	        return new ImportPreviewHooks(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.preUp = source["preUp"];
-	        this.postUp = source["postUp"];
-	        this.preDown = source["preDown"];
-	        this.postDown = source["postDown"];
-	    }
-	}
-	export class ImportPreviewPeer {
-	    name?: string;
-	    publicKey: string;
-	    allowedIPs: string[];
-	    endpoint?: string;
-	    keepalive: number;
-	    presharedKey: boolean;
-	
-	    static createFrom(source: any = {}) {
-	        return new ImportPreviewPeer(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.publicKey = source["publicKey"];
-	        this.allowedIPs = source["allowedIPs"];
-	        this.endpoint = source["endpoint"];
-	        this.keepalive = source["keepalive"];
-	        this.presharedKey = source["presharedKey"];
-	    }
-	}
-	export class ImportPreviewUser {
-	    name: string;
-	    exists: boolean;
-	    peers: ImportPreviewPeer[];
-	
-	    static createFrom(source: any = {}) {
-	        return new ImportPreviewUser(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.exists = source["exists"];
-	        this.peers = this.convertValues(source["peers"], ImportPreviewPeer);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class ImportPreview {
-	    interface: string;
-	    source: string;
-	    live: boolean;
-	    liveKind?: string;
-	    address: string;
-	    listenPort: number;
-	    amnezia: boolean;
-	    mtu?: number;
-	    dns?: string[];
-	    table?: number;
-	    users: ImportPreviewUser[];
-	    embeddedPeers: ImportPreviewPeer[];
-	    hooks: ImportPreviewHooks;
-	    generatedHooks: ImportPreviewHooks;
-	    warnings: string[];
-	
-	    static createFrom(source: any = {}) {
-	        return new ImportPreview(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.interface = source["interface"];
-	        this.source = source["source"];
-	        this.live = source["live"];
-	        this.liveKind = source["liveKind"];
-	        this.address = source["address"];
-	        this.listenPort = source["listenPort"];
-	        this.amnezia = source["amnezia"];
-	        this.mtu = source["mtu"];
-	        this.dns = source["dns"];
-	        this.table = source["table"];
-	        this.users = this.convertValues(source["users"], ImportPreviewUser);
-	        this.embeddedPeers = this.convertValues(source["embeddedPeers"], ImportPreviewPeer);
-	        this.hooks = this.convertValues(source["hooks"], ImportPreviewHooks);
-	        this.generatedHooks = this.convertValues(source["generatedHooks"], ImportPreviewHooks);
-	        this.warnings = source["warnings"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	
-	
-	
-	export class InterfacePeer {
-	    key: number[];
-	    psk?: number[];
-	    ips: string[];
-	    endpoint?: string;
-	    disabled?: boolean;
-	    keepalive: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new InterfacePeer(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.key = source["key"];
-	        this.psk = source["psk"];
-	        this.ips = source["ips"];
-	        this.endpoint = source["endpoint"];
-	        this.disabled = source["disabled"];
-	        this.keepalive = source["keepalive"];
-	    }
-	}
-	export class Interface {
-	    id: number[];
-	    iface: string;
-	    pk: number[];
-	    listen: number;
-	    addr: string;
-	    mtu?: number;
-	    dns?: string[];
-	    disabled?: boolean;
-	    table?: number;
-	    fwMark?: number;
-	    preUp?: string[];
-	    postUp?: string[];
-	    preDown?: string[];
-	    postDown?: string[];
-	    peers?: InterfacePeer[];
-	    jc?: number;
-	    jmin?: number;
-	    jmax?: number;
-	    s1?: number;
-	    s2?: number;
-	    s3?: number;
-	    s4?: number;
-	    h1?: string;
-	    h2?: string;
-	    h3?: string;
-	    h4?: string;
-	    i1?: string;
-	    i2?: string;
-	    i3?: string;
-	    i4?: string;
-	    i5?: string;
-	    provider?: string;
-	    resourceName?: string;
-	    inSync: boolean;
-	    lastSyncError?: string;
-	    // Go type: time
-	    lastSyncedAt: any;
-	    tunnel?: number[];
-	
-	    static createFrom(source: any = {}) {
-	        return new Interface(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.iface = source["iface"];
-	        this.pk = source["pk"];
-	        this.listen = source["listen"];
-	        this.addr = source["addr"];
-	        this.mtu = source["mtu"];
-	        this.dns = source["dns"];
-	        this.disabled = source["disabled"];
-	        this.table = source["table"];
-	        this.fwMark = source["fwMark"];
-	        this.preUp = source["preUp"];
-	        this.postUp = source["postUp"];
-	        this.preDown = source["preDown"];
-	        this.postDown = source["postDown"];
-	        this.peers = this.convertValues(source["peers"], InterfacePeer);
-	        this.jc = source["jc"];
-	        this.jmin = source["jmin"];
-	        this.jmax = source["jmax"];
-	        this.s1 = source["s1"];
-	        this.s2 = source["s2"];
-	        this.s3 = source["s3"];
-	        this.s4 = source["s4"];
-	        this.h1 = source["h1"];
-	        this.h2 = source["h2"];
-	        this.h3 = source["h3"];
-	        this.h4 = source["h4"];
-	        this.i1 = source["i1"];
-	        this.i2 = source["i2"];
-	        this.i3 = source["i3"];
-	        this.i4 = source["i4"];
-	        this.i5 = source["i5"];
-	        this.provider = source["provider"];
-	        this.resourceName = source["resourceName"];
-	        this.inSync = source["inSync"];
-	        this.lastSyncError = source["lastSyncError"];
-	        this.lastSyncedAt = this.convertValues(source["lastSyncedAt"], null);
-	        this.tunnel = source["tunnel"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class InterfaceConfig {
-	    iface: string;
-	    pk: number[];
-	    listen: number;
-	    addr: string;
-	    mtu?: number;
-	    dns?: string[];
-	    disabled?: boolean;
-	    table?: number;
-	    fwMark?: number;
-	    preUp?: string[];
-	    postUp?: string[];
-	    preDown?: string[];
-	    postDown?: string[];
-	    peers?: InterfacePeer[];
-	    jc?: number;
-	    jmin?: number;
-	    jmax?: number;
-	    s1?: number;
-	    s2?: number;
-	    s3?: number;
-	    s4?: number;
-	    h1?: string;
-	    h2?: string;
-	    h3?: string;
-	    h4?: string;
-	    i1?: string;
-	    i2?: string;
-	    i3?: string;
-	    i4?: string;
-	    i5?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new InterfaceConfig(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.iface = source["iface"];
-	        this.pk = source["pk"];
-	        this.listen = source["listen"];
-	        this.addr = source["addr"];
-	        this.mtu = source["mtu"];
-	        this.dns = source["dns"];
-	        this.disabled = source["disabled"];
-	        this.table = source["table"];
-	        this.fwMark = source["fwMark"];
-	        this.preUp = source["preUp"];
-	        this.postUp = source["postUp"];
-	        this.preDown = source["preDown"];
-	        this.postDown = source["postDown"];
-	        this.peers = this.convertValues(source["peers"], InterfacePeer);
-	        this.jc = source["jc"];
-	        this.jmin = source["jmin"];
-	        this.jmax = source["jmax"];
-	        this.s1 = source["s1"];
-	        this.s2 = source["s2"];
-	        this.s3 = source["s3"];
-	        this.s4 = source["s4"];
-	        this.h1 = source["h1"];
-	        this.h2 = source["h2"];
-	        this.h3 = source["h3"];
-	        this.h4 = source["h4"];
-	        this.i1 = source["i1"];
-	        this.i2 = source["i2"];
-	        this.i3 = source["i3"];
-	        this.i4 = source["i4"];
-	        this.i5 = source["i5"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
 	export class PeerHistoryPoint {
 	    // Go type: time
 	    timestamp: any;
@@ -782,7 +434,6 @@ export namespace models {
 		    return a;
 		}
 	}
-	
 	export class PeerSnapshot {
 	    publicKey: string;
 	    rx: number;
@@ -1090,29 +741,11 @@ export namespace models {
 		    return a;
 		}
 	}
-	export class NetworkConnection {
-	    id: number[];
-	    sourceId: number[];
-	    targetId: number[];
-	
-	    static createFrom(source: any = {}) {
-	        return new NetworkConnection(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.sourceId = source["sourceId"];
-	        this.targetId = source["targetId"];
-	    }
-	}
 	export class NetworkInterface {
 	    id: number[];
 	    serverId: number[];
 	    name: string;
 	    address?: string;
-	    legacy?: boolean;
-	    serviceId?: number[];
 	    x: number;
 	    y: number;
 	
@@ -1126,8 +759,6 @@ export namespace models {
 	        this.serverId = source["serverId"];
 	        this.name = source["name"];
 	        this.address = source["address"];
-	        this.legacy = source["legacy"];
-	        this.serviceId = source["serviceId"];
 	        this.x = source["x"];
 	        this.y = source["y"];
 	    }
@@ -1148,75 +779,9 @@ export namespace models {
 	        this.y = source["y"];
 	    }
 	}
-	export class Peer {
-	    name: string;
-	    pk: number[];
-	    interface: number[];
-	    provider?: string;
-	    resourceName?: string;
-	    disabled?: boolean;
-	    dns?: string[];
-	
-	    static createFrom(source: any = {}) {
-	        return new Peer(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.pk = source["pk"];
-	        this.interface = source["interface"];
-	        this.provider = source["provider"];
-	        this.resourceName = source["resourceName"];
-	        this.disabled = source["disabled"];
-	        this.dns = source["dns"];
-	    }
-	}
 	
 	
 	
-	export class PluginDescriptor {
-	    id: string;
-	    name: string;
-	    version: string;
-	    description?: string;
-	    configSchema: Record<string, any>;
-	    userSchema: Record<string, any>;
-	    uiSchema?: Record<string, any>;
-	    available: boolean;
-	    error?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new PluginDescriptor(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.name = source["name"];
-	        this.version = source["version"];
-	        this.description = source["description"];
-	        this.configSchema = source["configSchema"];
-	        this.userSchema = source["userSchema"];
-	        this.uiSchema = source["uiSchema"];
-	        this.available = source["available"];
-	        this.error = source["error"];
-	    }
-	}
-	export class PluginUser {
-	    id: string;
-	    data: Record<string, any>;
-	
-	    static createFrom(source: any = {}) {
-	        return new PluginUser(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.data = source["data"];
-	    }
-	}
 	
 	
 	export class ProviderDeployment {
@@ -1402,7 +967,6 @@ export namespace models {
 	    info: ServerInfo;
 	    ssh: SSHConfig;
 	    agent: Agent;
-	    interfaces?: number[][];
 	    unmanaged?: boolean;
 	
 	    static createFrom(source: any = {}) {
@@ -1416,7 +980,6 @@ export namespace models {
 	        this.info = this.convertValues(source["info"], ServerInfo);
 	        this.ssh = this.convertValues(source["ssh"], SSHConfig);
 	        this.agent = this.convertValues(source["agent"], Agent);
-	        this.interfaces = source["interfaces"];
 	        this.unmanaged = source["unmanaged"];
 	    }
 	
@@ -1558,53 +1121,6 @@ export namespace models {
 		    return a;
 		}
 	}
-	export class VPNService {
-	    id: number[];
-	    serverId: number[];
-	    interfaceId?: number[];
-	    pluginId: string;
-	    name: string;
-	    config: Record<string, any>;
-	    status: string;
-	    statusMessage?: string;
-	    // Go type: time
-	    lastAppliedAt?: any;
-	
-	    static createFrom(source: any = {}) {
-	        return new VPNService(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.serverId = source["serverId"];
-	        this.interfaceId = source["interfaceId"];
-	        this.pluginId = source["pluginId"];
-	        this.name = source["name"];
-	        this.config = source["config"];
-	        this.status = source["status"];
-	        this.statusMessage = source["statusMessage"];
-	        this.lastAppliedAt = this.convertValues(source["lastAppliedAt"], null);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
 	export class TopologyServer {
 	    id: number[];
 	    name: string;
@@ -1612,7 +1128,6 @@ export namespace models {
 	    description?: string;
 	    location?: string;
 	    locationError?: string;
-	    legacy?: boolean;
 	    latitude?: number;
 	    longitude?: number;
 	    coordinatesManual?: boolean;
@@ -1631,7 +1146,6 @@ export namespace models {
 	        this.description = source["description"];
 	        this.location = source["location"];
 	        this.locationError = source["locationError"];
-	        this.legacy = source["legacy"];
 	        this.latitude = source["latitude"];
 	        this.longitude = source["longitude"];
 	        this.coordinatesManual = source["coordinatesManual"];
@@ -1642,8 +1156,6 @@ export namespace models {
 	export class Topology {
 	    servers: TopologyServer[];
 	    interfaces: NetworkInterface[];
-	    services: VPNService[];
-	    connections: NetworkConnection[];
 	
 	    static createFrom(source: any = {}) {
 	        return new Topology(source);
@@ -1653,61 +1165,6 @@ export namespace models {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.servers = this.convertValues(source["servers"], TopologyServer);
 	        this.interfaces = this.convertValues(source["interfaces"], NetworkInterface);
-	        this.services = this.convertValues(source["services"], VPNService);
-	        this.connections = this.convertValues(source["connections"], NetworkConnection);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	
-	export class TunnelMember {
-	    serverId: number[];
-	    serverName: string;
-	    ifaceId: number[];
-	    interface: string;
-	    role: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new TunnelMember(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.serverId = source["serverId"];
-	        this.serverName = source["serverName"];
-	        this.ifaceId = source["ifaceId"];
-	        this.interface = source["interface"];
-	        this.role = source["role"];
-	    }
-	}
-	export class Tunnel {
-	    id: number[];
-	    members: TunnelMember[];
-	
-	    static createFrom(source: any = {}) {
-	        return new Tunnel(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.members = this.convertValues(source["members"], TunnelMember);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1745,40 +1202,11 @@ export namespace models {
 	        this.error = source["error"];
 	    }
 	}
-	export class TunnelStep {
-	    serverId: number[];
-	    ifaceId: number[];
-	
-	    static createFrom(source: any = {}) {
-	        return new TunnelStep(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.serverId = source["serverId"];
-	        this.ifaceId = source["ifaceId"];
-	    }
-	}
-	export class UnmanagedInterface {
-	    name: string;
-	    kind: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new UnmanagedInterface(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.name = source["name"];
-	        this.kind = source["kind"];
-	    }
-	}
 	export class User {
 	    id: number[];
 	    name: string;
 	    description?: string;
 	    disabled?: boolean;
-	    peers?: Peer[];
 	
 	    static createFrom(source: any = {}) {
 	        return new User(source);
@@ -1790,62 +1218,13 @@ export namespace models {
 	        this.name = source["name"];
 	        this.description = source["description"];
 	        this.disabled = source["disabled"];
-	        this.peers = this.convertValues(source["peers"], Peer);
 	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
 	}
 
 }
 
 export namespace service {
 	
-	export class AddPeerInput {
-	    Name: string;
-	    InterfaceID: number[];
-	    Spec: Record<string, any>;
-	    AllowedIPs: string[];
-	    Endpoint: string;
-	    DNS: string[];
-	    PrivateKey: string;
-	    PresharedKey: string;
-	    WithPresharedKey: boolean;
-	    KeepaliveInterval: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new AddPeerInput(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.Name = source["Name"];
-	        this.InterfaceID = source["InterfaceID"];
-	        this.Spec = source["Spec"];
-	        this.AllowedIPs = source["AllowedIPs"];
-	        this.Endpoint = source["Endpoint"];
-	        this.DNS = source["DNS"];
-	        this.PrivateKey = source["PrivateKey"];
-	        this.PresharedKey = source["PresharedKey"];
-	        this.WithPresharedKey = source["WithPresharedKey"];
-	        this.KeepaliveInterval = source["KeepaliveInterval"];
-	    }
-	}
 	export class NetworkInterfaceInput {
 	    name: string;
 	    address: string;
@@ -1873,38 +1252,6 @@ export namespace service {
 	        this.filename = source["filename"];
 	        this.data = source["data"];
 	    }
-	}
-	export class ReconcileReport {
-	    agentOnly: models.InterfaceConfig[];
-	    dbOnly: models.Interface[];
-	
-	    static createFrom(source: any = {}) {
-	        return new ReconcileReport(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.agentOnly = this.convertValues(source["agentOnly"], models.InterfaceConfig);
-	        this.dbOnly = this.convertValues(source["dbOnly"], models.Interface);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
 	}
 	export class ServerInput {
 	    Name: string;
@@ -1998,26 +1345,6 @@ export namespace service {
 	        this.Name = source["Name"];
 	        this.Description = source["Description"];
 	        this.Disabled = source["Disabled"];
-	    }
-	}
-	export class VPNServiceInput {
-	    serverId: string;
-	    interfaceId: string;
-	    pluginId: string;
-	    name: string;
-	    config: Record<string, any>;
-	
-	    static createFrom(source: any = {}) {
-	        return new VPNServiceInput(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.serverId = source["serverId"];
-	        this.interfaceId = source["interfaceId"];
-	        this.pluginId = source["pluginId"];
-	        this.name = source["name"];
-	        this.config = source["config"];
 	    }
 	}
 
