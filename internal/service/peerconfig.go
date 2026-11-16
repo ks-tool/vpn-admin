@@ -147,10 +147,13 @@ func (s *Service) GetPeerQRCode(userID string, key string) (string, error) {
 	return base64.StdEncoding.EncodeToString(png), nil
 }
 
-// writeAmneziaParams appends cfg's AmneziaWG obfuscation parameters (only
-// the ones that were actually set) so generated client configs keep working
-// against an AmneziaWG server instead of falling back to plain WireGuard.
+// writeAmneziaParams appends cfg's explicitly configured MTU and AmneziaWG
+// obfuscation parameters so generated client configs match the server instead
+// of falling back to client-side defaults.
 func writeAmneziaParams(b *strings.Builder, cfg awgmodels.InterfaceConfig) {
+	if cfg.MTU > 0 {
+		_, _ = fmt.Fprintf(b, "MTU = %d\n", cfg.MTU)
+	}
 	writeInt := func(name string, v *int) {
 		if v != nil {
 			_, _ = fmt.Fprintf(b, "%s = %d\n", name, *v)
