@@ -20,7 +20,7 @@ import {getCurrentApiMode} from './apiMode';
 import {bindingsClient} from './bindingsClient';
 import {throwIfPassphraseRequired} from './sshErrors';
 import {reportError} from './errorReporting';
-import type {Agent, ImportPreview, Interface, InterfaceHistory, Server, ServerInfo, SSHConfig, SystemHistory, UnmanagedInterface} from '@/types';
+import type {Agent, HostInfo, ImportPreview, Interface, InterfaceHistory, Server, ServerInfo, SSHConfig, SystemHistory, UnmanagedInterface} from '@/types';
 
 export interface ServerInput {
     name: string;
@@ -100,6 +100,26 @@ export async function updateServer(serverId: string, input: ServerInput): Promis
         return null;
     }
     return data;
+}
+
+export async function syncServer(serverId: string): Promise<boolean> {
+    const client = getClient();
+
+    if (client) {
+        const {error} = await client.syncServer(serverId);
+        if (error) {
+            console.error(`Failed to sync server ${serverId} (bindings):`, error);
+            return false;
+        }
+        return true;
+    }
+
+    const {error} = await post<void, undefined>(`/servers/${serverId}/sync`, undefined);
+    if (error) {
+        console.error(`Failed to sync server ${serverId}:`, error);
+        return false;
+    }
+    return true;
 }
 
 /**
@@ -265,6 +285,24 @@ export async function getServerInterfaceMetricsHistory(serverId: string, interfa
     const {data, error} = await get<InterfaceHistory>(`/servers/${serverId}/interfaces/${interfaceId}/metrics/history`);
     if (error) {
         console.error(`Failed to fetch interface metrics history for ${serverId}/${interfaceId}:`, error);
+        return null;
+    }
+    return data;
+}
+
+export async function getServerHostInfo(serverId: string): Promise<HostInfo | null> {
+    const client = getClient();
+    if (client) {
+        const {data, error} = await client.getServerHostInfo(serverId);
+        if (error) {
+            console.error(`Failed to fetch host info for ${serverId} (bindings):`, error);
+            return null;
+        }
+        return data as unknown as HostInfo;
+    }
+    const {data, error} = await get<HostInfo>(`/servers/${serverId}/host-info`);
+    if (error) {
+        console.error(`Failed to fetch host info for ${serverId}:`, error);
         return null;
     }
     return data;
