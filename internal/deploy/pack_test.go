@@ -48,7 +48,10 @@ func TestAgentPackValues(t *testing.T) {
 		t.Fatalf("unexpected agent values: %#v, credentials: %#v", values, credentials)
 	}
 	env := values["env"].(map[string]any)
-	if env["VPN_AGENT_LEGACY_PROXY"] != "http://127.0.0.1:9091" || env["VPN_AGENT_TLS_CERT"] != remoteServerCertPath {
+	if _, exists := env["VPN_AGENT_LEGACY_PROXY"]; exists {
+		t.Fatal("agent still configures the legacy provider HTTP proxy")
+	}
+	if env["VPN_AGENT_TLS_CERT"] != remoteServerCertPath {
 		t.Fatalf("unexpected agent environment: %#v", env)
 	}
 }

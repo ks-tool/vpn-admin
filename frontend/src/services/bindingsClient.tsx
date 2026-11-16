@@ -128,6 +128,19 @@ export const bindingsClient = {
         }
     },
 
+    async syncServer(id: string): Promise<ApiResponse<void>> {
+        try {
+            await AppBindings.SyncServer(id);
+            return { data: undefined };
+        } catch (error) {
+            console.error('Bindings SyncServer failed:', error);
+            return {
+                data: undefined,
+                error: extractErrorMessage(error),
+            };
+        }
+    },
+
     async generateAgentTLS(id: string): Promise<ApiResponse<models.Server>> {
         try {
             const data = await AppBindings.GenerateAgentTLS(id);
@@ -214,6 +227,19 @@ export const bindingsClient = {
             console.error('Bindings ServerAgentStatus failed:', error);
             return {
                 data: '',
+                error: extractErrorMessage(error),
+            };
+        }
+    },
+
+    async getServerHostInfo(id: string): Promise<ApiResponse<models.HostInfo>> {
+        try {
+            const data = await AppBindings.ServerHostInfo(id);
+            return { data };
+        } catch (error) {
+            console.error('Bindings ServerHostInfo failed:', error);
+            return {
+                data: null as never,
                 error: extractErrorMessage(error),
             };
         }
