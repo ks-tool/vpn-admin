@@ -216,6 +216,58 @@ func TestManualMigrationPreservesSourceAndMarksServersUnmanaged(t *testing.T) {
 	}
 }
 
+func TestManualMigrationOmitsEmptyPeerDNS(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "legacy.db")
+	destination := filepath.Join(root, "v2.db")
+	fixture := createLegacyFixture(t, source, false)
+	raw, err := bolt.Open(source, 0600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(bktUsers)
+		var user models.User
+		if err := json.Unmarshal(bucket.Get(idKey(fixture.user)), &user); err != nil {
+			return err
+		}
+		user.Peers[0].DNS = nil
+		return put(bucket, idKey(fixture.user), user)
+	}); err != nil {
+		_ = raw.Close()
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := MigrateV2(source, destination, false); err != nil {
+		t.Fatal(err)
+	}
+	db, err := Open(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	resources, err := db.Resources(fixture.serverA).List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, resource := range resources {
+		if resource.Kind != "Peer" {
+			continue
+		}
+		var spec map[string]json.RawMessage
+		if err := json.Unmarshal(resource.Spec, &spec); err != nil {
+			t.Fatal(err)
+		}
+		if _, exists := spec["dns"]; exists {
+			t.Fatalf("empty DNS must be omitted from migrated peer spec: %s", resource.Spec)
+		}
+		return
+	}
+	t.Fatal("migrated peer resource was not found")
+}
+
 func TestLegacyDatabaseWithSchemaVersionTwoMigrates(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "legacy.db")
