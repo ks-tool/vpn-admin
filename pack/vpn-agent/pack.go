@@ -59,9 +59,8 @@ func (t TLS) IsZero() bool {
 func (c *Config) SetDefaults() {
 	c.Artifact = "oci://ghcr.io/ks-tool/vpn-agent:v2.0.0-alpha.1"
 	c.Env = map[string]string{
-		"VPN_AGENT_DB":           "/var/lib/vpn-agent",
-		"VPN_AGENT_ADDR":         "127.0.0.1:8080",
-		"VPN_AGENT_LEGACY_PROXY": "http://127.0.0.1:9091",
+		"VPN_AGENT_DB":   "/var/lib/vpn-agent",
+		"VPN_AGENT_ADDR": "127.0.0.1:8080",
 	}
 	c.Unit = systemdUnit
 }

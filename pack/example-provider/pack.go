@@ -49,10 +49,9 @@ func (c *Config) SetDefaults() {
 	c.Registry = map[string]any{
 		"protocolVersion": "v1",
 		"providers": []any{map[string]any{
-			"address": "http://127.0.0.1:9090",
 			"command": "/usr/local/bin/example-provider",
 			"env": map[string]any{
-				"VPN_PROVIDER_DB": "/var/lib/example-provider", "VPN_PROVIDER_ADDR": "127.0.0.1:9090",
+				"VPN_PROVIDER_DB": "/var/lib/example-provider",
 			},
 			"provider": c.Definition,
 		}},
@@ -65,9 +64,7 @@ func (*Config) Meta() sdk.Meta {
 
 func (*Config) PackRoot() packschema.Root {
 	return packschema.Root{
-		Ports:     map[string]int{"provider": 9090},
-		Data:      map[string]packschema.Volume{"state": {MountPath: "/var/lib/example-provider", Size: "100Mi"}},
-		Readiness: &packschema.Readiness{HTTP: "provider/v1/manifest"},
+		Data: map[string]packschema.Volume{"state": {MountPath: "/var/lib/example-provider", Size: "100Mi"}},
 		Packages: map[string]packschema.OSInstall{
 			"debian": {
 				Prepare: []string{"ca-certificates"},
