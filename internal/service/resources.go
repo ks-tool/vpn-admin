@@ -18,6 +18,7 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,6 +31,7 @@ import (
 	"github.com/ks-tool/vpn-admin/internal/agentclient"
 	"github.com/ks-tool/vpn-admin/models"
 	"github.com/ks-tool/vpn-admin/storage"
+	"github.com/skip2/go-qrcode"
 )
 
 var ErrProviderNotFound = errors.New("provider not found in agent manifest")
@@ -535,6 +537,34 @@ func (s *Service) RunProviderResourceAction(serverID, provider, kind, name, acti
 		return err
 	})
 	return result, err
+}
+
+type ProviderClientConfig struct {
+	Text      string `json:"text"`
+	QRCode    string `json:"qrCode"`
+	FileName  string `json:"fileName,omitempty"`
+	MediaType string `json:"mediaType,omitempty"`
+}
+
+func (s *Service) RenderProviderClientConfig(serverID, provider, kind, name string, arguments json.RawMessage) (*ProviderClientConfig, error) {
+	result, err := s.RunProviderResourceAction(serverID, provider, kind, name, "renderClientConfig", arguments)
+	if err != nil {
+		return nil, err
+	}
+	if result.Type != models.ActionResultFile {
+		return nil, errors.New("renderClientConfig did not return a file")
+	}
+	var text string
+	if err := json.Unmarshal(result.Data, &text); err != nil {
+		return nil, fmt.Errorf("decode client configuration: %w", err)
+	}
+	png, err := qrcode.Encode(text, qrcode.Medium, 384)
+	if err != nil {
+		return nil, fmt.Errorf("encode client configuration QR code: %w", err)
+	}
+	return &ProviderClientConfig{
+		Text: text, QRCode: base64.StdEncoding.EncodeToString(png), FileName: result.FileName, MediaType: result.MediaType,
+	}, nil
 }
 
 func (s *Service) withAgent(serverID string, operation func(context.Context, *agentclient.Client) error) error {

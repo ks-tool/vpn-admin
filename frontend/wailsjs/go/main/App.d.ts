@@ -102,6 +102,8 @@ export function ListServers():Promise<Array<models.Server>>;
 
 export function ListUsers():Promise<Array<models.User>>;
 
+export function LogFrontend(arg1:string,arg2:string):Promise<void>;
+
 export function Login(arg1:string,arg2:string):Promise<void>;
 
 export function MoveProviderLink(arg1:string,arg2:string,arg3:string):Promise<models.Link>;
@@ -116,11 +118,15 @@ export function RefreshProviderManifest(arg1:string):Promise<models.Manifest>;
 
 export function RemoveProvider(arg1:string,arg2:string):Promise<void>;
 
+export function RenderProviderClientConfig(arg1:string,arg2:string,arg3:string,arg4:string,arg5:jsontext.Value):Promise<service.ProviderClientConfig>;
+
 export function RunProviderResourceAction(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:jsontext.Value):Promise<models.ActionResult>;
 
 export function SaveBackup():Promise<boolean>;
 
 export function SaveLogs():Promise<boolean>;
+
+export function SaveQRCode(arg1:string,arg2:string,arg3:string):Promise<boolean>;
 
 export function SaveServerProfile(arg1:string,arg2:string,arg3:number):Promise<boolean>;
 

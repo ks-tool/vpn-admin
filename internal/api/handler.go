@@ -150,6 +150,7 @@ func New(svc *service.Service, rootGroup *bunrouter.Group) *SessionStore {
 			gr.DELETE("/providers/:provider/resources/:kind/:name", h.providerResourceDelete)
 			gr.GET("/providers/:provider/resources/:kind/:name/status", h.providerResourceStatus)
 			gr.POST("/providers/:provider/resources/:kind/:name/actions/:action", h.providerResourceAction)
+			gr.POST("/providers/:provider/resources/:kind/:name/client-config", h.providerClientConfig)
 
 			gr.GET("/interfaces/:ifaceID/metrics", h.serverInterfaceMetrics)
 			gr.GET("/interfaces/:ifaceID/metrics/history", h.serverInterfaceMetricsHistory)

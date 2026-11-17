@@ -9,6 +9,7 @@ require (
 	github.com/ks-tool/app-config/go v1.0.0
 	github.com/ks-tool/vpn-agent/v2 v2.0.0
 	github.com/rs/zerolog v1.35.1
+	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/spf13/pflag v1.1.0
 	github.com/uptrace/bunrouter v1.0.23
 	github.com/wailsapp/wails/v2 v2.16.0

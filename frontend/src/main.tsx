@@ -19,6 +19,16 @@ import { createRoot } from 'react-dom/client';
 import './index.css';
 import App from './App';
 import './i18n/config';
+import {logError} from './services/errorReporting';
+
+window.addEventListener('error', event => {
+    const error = event.error instanceof Error ? event.error.message : event.message;
+    logError('Unhandled UI error', error);
+});
+window.addEventListener('unhandledrejection', event => {
+    const error = event.reason instanceof Error ? event.reason.message : String(event.reason);
+    logError('Unhandled UI promise rejection', error);
+});
 
 createRoot(document.getElementById('root')!).render(
     <StrictMode>

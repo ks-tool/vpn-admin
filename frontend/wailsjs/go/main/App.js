@@ -198,6 +198,10 @@ export function ListUsers() {
   return window['go']['main']['App']['ListUsers']();
 }
 
+export function LogFrontend(arg1, arg2) {
+  return window['go']['main']['App']['LogFrontend'](arg1, arg2);
+}
+
 export function Login(arg1, arg2) {
   return window['go']['main']['App']['Login'](arg1, arg2);
 }
@@ -226,6 +230,10 @@ export function RemoveProvider(arg1, arg2) {
   return window['go']['main']['App']['RemoveProvider'](arg1, arg2);
 }
 
+export function RenderProviderClientConfig(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['RenderProviderClientConfig'](arg1, arg2, arg3, arg4, arg5);
+}
+
 export function RunProviderResourceAction(arg1, arg2, arg3, arg4, arg5, arg6) {
   return window['go']['main']['App']['RunProviderResourceAction'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
@@ -236,6 +244,10 @@ export function SaveBackup() {
 
 export function SaveLogs() {
   return window['go']['main']['App']['SaveLogs']();
+}
+
+export function SaveQRCode(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SaveQRCode'](arg1, arg2, arg3);
 }
 
 export function SaveServerProfile(arg1, arg2, arg3) {

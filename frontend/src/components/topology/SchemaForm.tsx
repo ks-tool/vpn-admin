@@ -16,7 +16,8 @@
 
 import type {ReactNode} from 'react';
 import Form, {type IChangeEvent} from '@rjsf/core';
-import validator from '@rjsf/validator-ajv8';
+import {customizeValidator} from '@rjsf/validator-ajv8';
+import Ajv2020 from 'ajv/dist/2020.js';
 import {TranslatableString, type IconButtonProps, type RJSFSchema, type UiSchema} from '@rjsf/utils';
 import {ArrowDown, ArrowUp, Copy, Plus, Trash2, X} from 'lucide-react';
 import {buttons} from '@/components/common/controls';
@@ -44,6 +45,8 @@ const buttonTemplates = {
     RemoveButton: (props: IconButtonProps) => arrayButton(props, TranslatableString.RemoveButton, <Trash2 size={16} />),
     ClearButton: (props: IconButtonProps) => arrayButton(props, TranslatableString.ClearButton, <X size={16} />),
 };
+
+const validator = customizeValidator({AjvClass: Ajv2020});
 
 interface SchemaFormProps {
     schema: Record<string, unknown>;

@@ -1253,6 +1253,24 @@ export namespace service {
 	        this.data = source["data"];
 	    }
 	}
+	export class ProviderClientConfig {
+	    text: string;
+	    qrCode: string;
+	    fileName?: string;
+	    mediaType?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ProviderClientConfig(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.text = source["text"];
+	        this.qrCode = source["qrCode"];
+	        this.fileName = source["fileName"];
+	        this.mediaType = source["mediaType"];
+	    }
+	}
 	export class ServerInput {
 	    Name: string;
 	    Info: models.ServerInfo;

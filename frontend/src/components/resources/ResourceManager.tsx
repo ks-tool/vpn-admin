@@ -23,6 +23,7 @@ import {FormField} from '@/components/common/FormField';
 import {Modal} from '@/components/common/Modal';
 import {buttons, inputs} from '@/components/common/controls';
 import {SchemaForm} from '@/components/topology/SchemaForm';
+import {logError} from '@/services/errorReporting';
 import {syncServer} from '@/services/servers';
 import {
     deleteProviderResource,
@@ -34,6 +35,7 @@ import {
     saveActionResult,
 } from '@/services/resources';
 import {cn} from '@/lib/utils';
+import {ClientConfigAction} from './ClientConfigAction';
 import type {ActionDefinition, ActionResult, ProviderDefinition, ProviderManifest, ProviderResource, ResourceDefinition} from '@/types';
 
 export interface ListedResource {
@@ -259,7 +261,21 @@ function supportsDisabled(definition: ResourceDefinition): boolean {
     return properties?.disabled?.type === 'boolean';
 }
 
-export function ResourceAction({state, busy, onClose, onExecute}: {state: ActionState; busy: boolean; onClose: () => void; onExecute: (state: ActionState, args: Record<string, unknown>) => Promise<ActionResult>}) {
+interface ResourceActionProps {
+    state: ActionState;
+    busy: boolean;
+    onClose: () => void;
+    onExecute: (state: ActionState, args: Record<string, unknown>) => Promise<ActionResult>;
+}
+
+export function ResourceAction(props: ResourceActionProps) {
+    if (props.state.action.name === 'renderClientConfig') {
+        return <ClientConfigAction state={props.state} onClose={props.onClose}/>;
+    }
+    return <GenericResourceAction {...props}/>;
+}
+
+function GenericResourceAction({state, busy, onClose, onExecute}: ResourceActionProps) {
     const {t} = useTranslation();
     const [formData, setFormData] = useState<Record<string, unknown>>(state.initialArguments ?? {});
     const [result, setResult] = useState<ActionResult | null>(null);
@@ -270,7 +286,9 @@ export function ResourceAction({state, busy, onClose, onExecute}: {state: Action
         try {
             setResult(await onExecute(state, args));
         } catch (cause) {
-            setError(cause instanceof Error ? cause.message : t('resources.actionError'));
+            const message = cause instanceof Error ? cause.message : t('resources.actionError');
+            setError(message);
+            logError(state.action.title, message);
         }
     };
     const resultText = result?.type === 'file' && typeof result.data === 'string' ? result.data : result ? JSON.stringify(result.data ?? {taskId: result.taskId}, null, 2) : '';

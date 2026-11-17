@@ -17,6 +17,7 @@
 package service
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -266,5 +267,23 @@ func TestServerAdoptionSkipsEmptyEmbeddedPeerSecret(t *testing.T) {
 	}
 	if agent.actionCalls != 0 {
 		t.Fatalf("empty peer triggered %d secret imports", agent.actionCalls)
+	}
+}
+
+func TestRenderProviderClientConfigIncludesTextAndQRCode(t *testing.T) {
+	svc, server, agent := newTestServerWithAgent(t)
+	result, err := svc.RenderProviderClientConfig(server.ID.String(), "test", "Peer", "alice-laptop", json.RawMessage(`{"endpoint":"192.0.2.1:51820"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Text != "test://client" || result.FileName != "peer.txt" {
+		t.Fatalf("unexpected client configuration: %+v", result)
+	}
+	png, err := base64.StdEncoding.DecodeString(result.QRCode)
+	if err != nil || len(png) < 8 || string(png[:8]) != "\x89PNG\r\n\x1a\n" {
+		t.Fatalf("invalid QR PNG: %v", err)
+	}
+	if agent.actionCalls != 1 || !strings.Contains(string(agent.actionArguments), `"endpoint":"192.0.2.1:51820"`) {
+		t.Fatalf("action calls=%d, arguments=%s", agent.actionCalls, agent.actionArguments)
 	}
 }

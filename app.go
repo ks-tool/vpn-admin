@@ -19,6 +19,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -113,6 +114,24 @@ func (a *App) SaveTextFile(title, defaultName, content string) (bool, error) {
 	return true, nil
 }
 
+func (a *App) SaveQRCode(title, defaultName, encoded string) (bool, error) {
+	if a.ctx == nil {
+		return false, nil
+	}
+	png, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return false, fmt.Errorf("decode QR code: %w", err)
+	}
+	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{Title: title, DefaultFilename: defaultName})
+	if err != nil || path == "" {
+		return false, err
+	}
+	if err := os.WriteFile(path, png, 0o600); err != nil {
+		return false, fmt.Errorf("write QR code: %w", err)
+	}
+	return true, nil
+}
+
 // GetLogs returns the captured stdout log entries as newline-joined NDJSON
 // (one zerolog JSON object per line, oldest first) for the Settings "Logs"
 // modal. Returns an empty string when the buffer was never wired up (i.e. not
@@ -140,6 +159,19 @@ func (a *App) SetDebugLogging(enabled bool) {
 	} else {
 		zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	}
+}
+
+func (a *App) LogFrontend(level, message string) {
+	event := log.Error()
+	switch level {
+	case "debug":
+		event = log.Debug()
+	case "info":
+		event = log.Info()
+	case "warn":
+		event = log.Warn()
+	}
+	event.Str("source", "frontend").Msg(message)
 }
 
 // SaveLogs writes the captured logs to a user-chosen file as a JSON array of

@@ -110,3 +110,17 @@ func (h *Handler) providerResourceAction(w http.ResponseWriter, r bunrouter.Requ
 	}
 	return bunrouter.JSON(w, result)
 }
+
+func (h *Handler) providerClientConfig(w http.ResponseWriter, r bunrouter.Request) error {
+	var input struct {
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := decode(r, &input); err != nil {
+		return badRequest(err)
+	}
+	result, err := h.svc.RenderProviderClientConfig(r.Param("serverID"), r.Param("provider"), r.Param("kind"), r.Param("name"), input.Arguments)
+	if err != nil {
+		return handleErr(err, resourceFields(r))
+	}
+	return bunrouter.JSON(w, result)
+}

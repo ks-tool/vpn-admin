@@ -17,7 +17,7 @@
 import * as AppBindings from '../../wailsjs/go/main/App';
 import {get, post, put, remove} from './api';
 import {getCurrentApiMode} from './apiMode';
-import type {ActionResult, ProviderDefinition, ProviderLink, ProviderManifest, ProviderResource, ResourceStatus} from '@/types';
+import type {ActionResult, ProviderClientConfig, ProviderDefinition, ProviderLink, ProviderManifest, ProviderResource, ResourceStatus} from '@/types';
 
 function unwrap<T>(response: {data: T; error?: string}): T {
     if (response.error) throw new Error(response.error);
@@ -86,6 +86,24 @@ export async function runProviderResourceAction(serverId: string, provider: stri
     return isDesktop()
         ? binding(() => AppBindings.RunProviderResourceAction(serverId, provider, kind, name, action, args as never))
         : unwrap(await post<ActionResult, {arguments: Record<string, unknown>}>(`${resourcePath(serverId, provider, kind, name)}/actions/${encodeURIComponent(action)}`, {arguments: args}));
+}
+
+export async function renderProviderClientConfig(serverId: string, provider: string, kind: string, name: string, args: Record<string, unknown>): Promise<ProviderClientConfig> {
+    return isDesktop()
+        ? binding(() => AppBindings.RenderProviderClientConfig(serverId, provider, kind, name, args as never))
+        : unwrap(await post<ProviderClientConfig, {arguments: Record<string, unknown>}>(`${resourcePath(serverId, provider, kind, name)}/client-config`, {arguments: args}));
+}
+
+export async function saveClientConfigQRCode(name: string, base64: string): Promise<boolean> {
+    const fileName = `${name || 'peer'}.png`;
+    if (isDesktop()) {
+        return binding(() => AppBindings.SaveQRCode('Save QR code', fileName, base64));
+    }
+    const anchor = document.createElement('a');
+    anchor.href = `data:image/png;base64,${base64}`;
+    anchor.download = fileName;
+    anchor.click();
+    return true;
 }
 
 export async function saveActionResult(result: ActionResult, content: string): Promise<void> {

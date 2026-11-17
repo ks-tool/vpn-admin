@@ -75,6 +75,13 @@ export interface ActionResult {
     taskId?: string;
 }
 
+export interface ProviderClientConfig {
+    text: string;
+    qrCode: string;
+    fileName?: string;
+    mediaType?: string;
+}
+
 export interface ProviderLink {
     id: string;
     name?: string;
