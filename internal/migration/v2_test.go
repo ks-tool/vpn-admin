@@ -477,7 +477,7 @@ func TestV2RejectsUserPeerMissingFromInterface(t *testing.T) {
 	if err := raw.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := migration.V2(source, destination, false); err == nil || !strings.Contains(err.Error(), "is missing from interface") {
+	if err := migration.V2(source, destination, false); err == nil || !strings.Contains(err.Error(), `interface "awg0"`) || !strings.Contains(err.Error(), `server "a"`) {
 		t.Fatalf("inconsistent v1 peer error = %v", err)
 	}
 	if _, err := os.Stat(destination); !os.IsNotExist(err) {

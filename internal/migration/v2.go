@@ -357,7 +357,7 @@ func migrateUserPeer(user v1User, peer v1Peer, iface v1Interface, server models.
 		}
 	}
 	if configured == nil {
-		return models.Resource{}, models.ResourceSecret{}, fmt.Errorf("user %s peer %q is missing from interface %s; restore the v1 interface peer instead of allocating a new address", user.ID, peer.Name, iface.ID)
+		return models.Resource{}, models.ResourceSecret{}, fmt.Errorf("user %q (%s) peer %q with public key %s is missing from interface %q (%s) on server %q (%s)", user.Name, user.ID, peer.Name, publicKey, iface.Interface, iface.ID, server.Name, server.ID)
 	}
 	id := models.NewDeterministicUUID(user.ID.String() + ":" + peer.InterfaceID.String() + ":" + publicKey)
 	values := map[string]any{
