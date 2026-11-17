@@ -84,7 +84,6 @@ export function ClientConfigAction({state, onClose}: {state: ActionState; onClos
                         </button>
                     </>
                 )}
-                <button type="button" onClick={onClose} className={cn('w-full', buttons.secondary)}>{t('common.close')}</button>
             </div>
         </Modal>
     );
