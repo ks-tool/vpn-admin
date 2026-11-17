@@ -39,22 +39,23 @@ import (
 const targetSchemaVersion = 2
 
 var (
-	bucketServers       = []byte("servers")
-	bucketUsers         = []byte("users")
-	bucketInterfaces    = []byte("interfaces")
-	bucketAuth          = []byte("auth")
-	bucketAgentSources  = []byte("agent_sources")
-	bucketRegistry      = []byte("registry_sources")
-	bucketTopology      = []byte("topology")
-	bucketResources     = []byte("resources")
-	bucketLinks         = []byte("links")
-	bucketProviders     = []byte("providers")
-	bucketSecrets       = []byte("secrets")
-	bucketMeta          = []byte("meta")
-	schemaVersionKey    = []byte("schemaVersion")
-	registryInitialized = []byte("registrySourcesInitialized")
-	authCredentialsKey  = []byte("credentials")
-	topologyMainKey     = []byte("main")
+	errMissingInterfacePeer = errors.New("peer is missing from the v1 interface")
+	bucketServers           = []byte("servers")
+	bucketUsers             = []byte("users")
+	bucketInterfaces        = []byte("interfaces")
+	bucketAuth              = []byte("auth")
+	bucketAgentSources      = []byte("agent_sources")
+	bucketRegistry          = []byte("registry_sources")
+	bucketTopology          = []byte("topology")
+	bucketResources         = []byte("resources")
+	bucketLinks             = []byte("links")
+	bucketProviders         = []byte("providers")
+	bucketSecrets           = []byte("secrets")
+	bucketMeta              = []byte("meta")
+	schemaVersionKey        = []byte("schemaVersion")
+	registryInitialized     = []byte("registrySourcesInitialized")
+	authCredentialsKey      = []byte("credentials")
+	topologyMainKey         = []byte("main")
 )
 
 type v1Server struct {
@@ -118,8 +119,26 @@ type inventory struct {
 	topology   v1Topology
 }
 
+// MigrationWarning describes skipped input and the action required to migrate it.
+type MigrationWarning struct {
+	Message string
+	Action  string
+}
+
 // V2 converts a v1 database into a separate resource-only v2 database.
 func V2(sourcePath, destinationPath string, force bool) error {
+	_, err := V2WithWarnings(sourcePath, destinationPath, force)
+	return err
+}
+
+// V2WithWarnings converts a v1 database and reports records skipped because of inconsistencies.
+func V2WithWarnings(sourcePath, destinationPath string, force bool) ([]MigrationWarning, error) {
+	var warnings []MigrationWarning
+	err := migrateV2(sourcePath, destinationPath, force, &warnings)
+	return warnings, err
+}
+
+func migrateV2(sourcePath, destinationPath string, force bool, warnings *[]MigrationWarning) error {
 	sourceAbs, err := filepath.Abs(sourcePath)
 	if err != nil {
 		return err
@@ -164,7 +183,7 @@ func V2(sourcePath, destinationPath string, force bool) error {
 	}
 	err = source.View(func(sourceTx *bolt.Tx) error {
 		return destination.Update(func(destinationTx *bolt.Tx) error {
-			return migrateSnapshot(sourceTx, destinationTx)
+			return migrateSnapshot(sourceTx, destinationTx, warnings)
 		})
 	})
 	if err != nil {
@@ -189,7 +208,7 @@ func validateSource(db *bolt.DB) error {
 	})
 }
 
-func migrateSnapshot(source, target *bolt.Tx) error {
+func migrateSnapshot(source, target *bolt.Tx, warnings *[]MigrationWarning) error {
 	for _, name := range [][]byte{bucketServers, bucketUsers, bucketAuth, bucketAgentSources, bucketRegistry, bucketTopology, bucketResources, bucketLinks, bucketProviders, bucketSecrets, bucketMeta} {
 		if _, err := target.CreateBucketIfNotExists(name); err != nil {
 			return err
@@ -268,6 +287,13 @@ func migrateSnapshot(source, target *bolt.Tx) error {
 				return fmt.Errorf("user %s peer %q references missing interface %s", old.ID, peer.Name, peer.InterfaceID)
 			}
 			resource, secret, err := migrateUserPeer(old, peer, iface, data.owners[iface.ID])
+			if errors.Is(err, errMissingInterfacePeer) {
+				*warnings = append(*warnings, MigrationWarning{
+					Message: err.Error(),
+					Action:  fmt.Sprintf("Restore peer %q with its original AllowedIPs in v1 interface %q, or delete it from v1 user %q if it is no longer needed; then rerun migration", peer.Name, iface.Interface, old.Name),
+				})
+				continue
+			}
 			if err != nil {
 				return err
 			}
@@ -357,7 +383,7 @@ func migrateUserPeer(user v1User, peer v1Peer, iface v1Interface, server models.
 		}
 	}
 	if configured == nil {
-		return models.Resource{}, models.ResourceSecret{}, fmt.Errorf("user %q (%s) peer %q with public key %s is missing from interface %q (%s) on server %q (%s)", user.Name, user.ID, peer.Name, publicKey, iface.Interface, iface.ID, server.Name, server.ID)
+		return models.Resource{}, models.ResourceSecret{}, fmt.Errorf("user %q (%s) peer %q with public key %s is missing from interface %q (%s) on server %q (%s): %w", user.Name, user.ID, peer.Name, publicKey, iface.Interface, iface.ID, server.Name, server.ID, errMissingInterfacePeer)
 	}
 	id := models.NewDeterministicUUID(user.ID.String() + ":" + peer.InterfaceID.String() + ":" + publicKey)
 	values := map[string]any{

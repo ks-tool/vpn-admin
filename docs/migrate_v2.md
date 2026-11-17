@@ -89,6 +89,7 @@ If `~/.vpn-admin/db` already exists, back it up before intentionally replacing i
 - Users, peers, administrator credentials, agent sources and topology coordinates are preserved.
 - Legacy interfaces become `awg.ks-tool.dev/v1` resources with `Kind=Interface`; interface UUIDs are preserved.
 - User peers and peers without a user become `Kind=Peer` resources; user peers retain `interfaceRef` and `userRef`.
+- A user peer whose public key is absent from its v1 interface is skipped with a `WARNING`; no replacement address is allocated. After migration, the command lists the required actions: restore the original peer in v1 or delete the orphaned user peer, then rerun the migration.
 - Legacy tunnels and topology connections become `Link` records.
 - New `resources`, `links`, `providers`, `secrets` and `meta` buckets are created. The legacy `interfaces` bucket and embedded server/user peer lists are not copied.
 - `meta.schemaVersion` is set to `2`.
@@ -214,7 +215,8 @@ awg-migrate v2 --db ~/.awg-admin --out ~/.vpn-admin/db --force
 - Сохраняются серверы, включая UUID, Location, SSH-настройки и mTLS-материал агентов.
 - Сохраняются пользователи, пиры, учётные данные администратора, источники агентов и координаты топологии.
 - Прежние интерфейсы становятся ресурсами `awg.ks-tool.dev/v1` с `Kind=Interface`; UUID интерфейсов сохраняются.
-- Все пиры становятся ресурсами `Kind=Peer`; у пользовательских пиров сохраняются `interfaceRef` и `userRef`.
+- Согласованные пиры становятся ресурсами `Kind=Peer`; у пользовательских пиров сохраняются `interfaceRef` и `userRef`.
+- Если публичный ключ пользовательского peer-а отсутствует в его интерфейсе v1, такой peer пропускается с `WARNING`; новый адрес не выделяется. После миграции команда выводит необходимые действия: восстановить исходный peer в v1 или удалить осиротевший peer пользователя, затем повторить миграцию.
 - Прежние туннели и связи топологии становятся записями `Link`.
 - Создаются buckets `resources`, `links`, `providers`, `secrets` и `meta`. Bucket `interfaces` и встроенные списки пиров в серверах/пользователях не копируются.
 - В `meta.schemaVersion` записывается значение `2`.

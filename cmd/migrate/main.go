@@ -111,11 +111,21 @@ func runV2Cmd(args []string) {
 	}
 	cfg := v2Config{DB: filepath.Join(home, ".awg-admin"), Out: filepath.Join(home, ".vpn-admin", "db")}
 	parseCommandConfig("v2", &cfg, args)
-	if err := migration.V2(cfg.DB, cfg.Out, cfg.Force); err != nil {
+	warnings, err := migration.V2WithWarnings(cfg.DB, cfg.Out, cfg.Force)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "v2 migration failed:", err)
 		os.Exit(1)
 	}
+	for _, warning := range warnings {
+		fmt.Fprintf(os.Stderr, "WARNING: skipped %s\n", warning.Message)
+	}
 	fmt.Printf("migrated v1 %s -> v2 %s; source was not modified\n", cfg.DB, cfg.Out)
+	if len(warnings) > 0 {
+		fmt.Fprintln(os.Stderr, "\nRequired actions:")
+		for _, warning := range warnings {
+			fmt.Fprintf(os.Stderr, "- %s\n", warning.Action)
+		}
+	}
 }
 
 func runExportCmd(args []string) {

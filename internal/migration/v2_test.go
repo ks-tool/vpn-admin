@@ -450,7 +450,7 @@ func TestV2EmbeddedPeerWithoutPSKHasNoPendingSecret(t *testing.T) {
 	t.Fatal("embedded peer without PSK was not migrated")
 }
 
-func TestV2RejectsUserPeerMissingFromInterface(t *testing.T) {
+func TestV2SkipsUserPeerMissingFromInterfaceWithWarning(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "v1.db")
 	destination := filepath.Join(root, "v2.db")
@@ -477,10 +477,26 @@ func TestV2RejectsUserPeerMissingFromInterface(t *testing.T) {
 	if err := raw.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := migration.V2(source, destination, false); err == nil || !strings.Contains(err.Error(), `interface "awg0"`) || !strings.Contains(err.Error(), `server "a"`) {
-		t.Fatalf("inconsistent v1 peer error = %v", err)
+	warnings, err := migration.V2WithWarnings(source, destination, false)
+	if err != nil {
+		t.Fatalf("migration with an inconsistent peer failed: %v", err)
 	}
-	if _, err := os.Stat(destination); !os.IsNotExist(err) {
-		t.Fatalf("migration with an allocated peer address produced a destination: %v", err)
+	if len(warnings) != 1 || !strings.Contains(warnings[0].Message, `peer "laptop"`) || !strings.Contains(warnings[0].Message, `interface "awg0"`) || !strings.Contains(warnings[0].Message, `server "a"`) {
+		t.Fatalf("inconsistent peer warnings = %+v", warnings)
 	}
+	if !strings.Contains(warnings[0].Action, "original AllowedIPs") || !strings.Contains(warnings[0].Action, "delete it") || !strings.Contains(warnings[0].Action, "rerun migration") {
+		t.Fatalf("missing recovery action: %+v", warnings[0])
+	}
+	db, err := boltdb.Open(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources, err := db.Resources(data.serverA).List()
+	if err != nil || len(resources) != 1 || resources[0].Kind != "Interface" {
+		t.Fatalf("inconsistent peer was not skipped cleanly: %+v, %v", resources, err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertCleanBuckets(t, destination)
 }
