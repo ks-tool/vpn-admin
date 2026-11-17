@@ -164,6 +164,12 @@ func (s *Service) DeleteProviderLink(id string) error {
 	}); err != nil {
 		return s.failLink(link, err)
 	}
+	if err := models.ValidateLinkOffer(*link, *sourceOffer); err != nil {
+		return s.failLink(link, err)
+	}
+	if err := models.ValidateLinkOffer(*link, *targetOffer); err != nil {
+		return s.failLink(link, err)
+	}
 	var deleteErrors []error
 	if err := s.withAgent(link.Source.ServerID, func(ctx context.Context, client *agentclient.Client) error {
 		return client.DeleteLink(ctx, source.provider, models.LinkRequest{Link: *link, Endpoint: source.endpoint, RemoteOffer: targetOffer})
@@ -197,6 +203,12 @@ func (s *Service) coordinateLink(link *models.Link, source, target resolvedEndpo
 		targetOffer, err = client.PrepareLink(ctx, target.provider, models.LinkRequest{Link: *link, Endpoint: target.endpoint})
 		return err
 	}); err != nil {
+		return s.failLink(link, err)
+	}
+	if err := models.ValidateLinkOffer(*link, *sourceOffer); err != nil {
+		return s.failLink(link, err)
+	}
+	if err := models.ValidateLinkOffer(*link, *targetOffer); err != nil {
 		return s.failLink(link, err)
 	}
 	if err := s.withAgent(link.Target.ServerID, func(ctx context.Context, client *agentclient.Client) error {
@@ -235,22 +247,21 @@ func (s *Service) resolveEndpoint(resourceID string) (resolvedEndpoint, error) {
 		if err != nil {
 			continue
 		}
-		manifest, err := s.GetProviderManifest(server.ID.String())
+		providerName := providerFromAPIVersion(resource.APIVersion)
+		provider, err := s.GetProviderSchema(server.ID.String(), providerName)
 		if err != nil {
 			return resolvedEndpoint{}, err
 		}
-		for _, provider := range manifest.Providers {
-			for _, definition := range provider.Resources {
-				if definition.APIVersion != resource.APIVersion || definition.Kind != resource.Kind {
-					continue
-				}
-				for _, port := range definition.Ports {
-					if len(port.LinkKinds) > 0 {
-						return resolvedEndpoint{
-							provider: provider.Name, definition: definition, port: port,
-							endpoint: models.LinkEndpoint{ServerID: server.ID.String(), ResourceID: resource.ID, APIVersion: resource.APIVersion, Kind: resource.Kind, Name: resource.Name, Port: port.Name, Address: server.SSH.Host},
-						}, nil
-					}
+		for _, definition := range provider.Resources {
+			if definition.APIVersion != resource.APIVersion || definition.Kind != resource.Kind {
+				continue
+			}
+			for _, port := range definition.Ports {
+				if len(port.LinkKinds) > 0 {
+					return resolvedEndpoint{
+						provider: provider.Name, definition: definition, port: port,
+						endpoint: models.LinkEndpoint{ServerID: server.ID.String(), ResourceID: resource.ID, APIVersion: resource.APIVersion, Kind: resource.Kind, Name: resource.Name, Port: port.Name, Address: server.SSH.Host},
+					}, nil
 				}
 			}
 		}

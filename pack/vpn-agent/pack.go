@@ -28,7 +28,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=/etc/vpn-agent/vpn-agent.env
+EnvironmentFile=/var/lib/vpn-agent/vpn-agent.env
 ExecStart=/usr/local/bin/vpn-agent
 Restart=on-failure
 RestartSec=3
@@ -78,7 +78,7 @@ func (c *Config) PackRoot() packschema.Root {
 	return packschema.Root{
 		Ports:     map[string]int{"agent": 8080},
 		Data:      map[string]packschema.Volume{"state": {MountPath: "/var/lib/vpn-agent", Size: "100Mi"}},
-		Readiness: &packschema.Readiness{HTTP: "agent/v1/manifest"},
+		Readiness: &packschema.Readiness{HTTP: "agent/v2/manifest"},
 		Hooks: []packschema.Hook{
 			{
 				Name: "stop-legacy-agent", Phase: packschema.PreInstall, Idempotent: true, Timeout: "30s",
@@ -104,10 +104,10 @@ fi`},
 				Content: []packschema.File{
 					binary,
 					{Path: "/etc/systemd/system/vpn-agent.service", Values: "unit", Format: "text", Mode: "0644"},
-					{Path: "/etc/vpn-agent/vpn-agent.env", Values: "env", Format: "env", Mode: "0600"},
-					{Path: "/etc/vpn-agent/ca.pem", Values: "tls/ca", Format: "text", Mode: "0600"},
-					{Path: "/etc/vpn-agent/server.pem", Values: "tls/certificate", Format: "text", Mode: "0600"},
-					{Path: "/etc/vpn-agent/server-key.pem", Values: "tls/privateKey", Format: "text", Mode: "0600"},
+					{Path: "/var/lib/vpn-agent/vpn-agent.env", Values: "env", Format: "env", Mode: "0600"},
+					{Path: "/var/lib/vpn-agent/ca.pem", Values: "tls/ca", Format: "text", Mode: "0600"},
+					{Path: "/var/lib/vpn-agent/server.pem", Values: "tls/certificate", Format: "text", Mode: "0600"},
+					{Path: "/var/lib/vpn-agent/server-key.pem", Values: "tls/privateKey", Format: "text", Mode: "0600"},
 				},
 			},
 		},

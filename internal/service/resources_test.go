@@ -21,12 +21,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 	"uuid"
 
 	"github.com/ks-tool/vpn-admin/models"
 	"github.com/ks-tool/vpn-admin/storage"
+	awgmodels "github.com/ks-tool/vpn-agent/v2/providers/awg/models"
 )
 
 func TestProviderResourceLifecycleAndSchemaCache(t *testing.T) {
@@ -72,6 +74,27 @@ func TestProviderResourceLifecycleAndSchemaCache(t *testing.T) {
 	}
 }
 
+func TestProviderSchemaRefetchesIncompleteManifest(t *testing.T) {
+	svc, server, agent := newTestServerWithAgent(t)
+	record := &models.ProviderRecord{ServerID: server.ID.String(), Installed: true, Definition: models.ProviderDefinition{Name: "test", Version: "1", Resources: []models.ResourceDefinition{{APIVersion: "test/v1", Kind: "Service", SpecSchema: json.RawMessage(`{"type":"object"}`)}}}}
+	if err := svc.store.Providers().Set(record); err != nil {
+		t.Fatal(err)
+	}
+	definition, err := svc.GetProviderSchema(server.ID.String(), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(definition.Resources) == 0 || len(definition.Resources[0].Actions) == 0 || len(definition.Resources[0].SchemaHash) == 0 {
+		t.Fatalf("incomplete schema was returned: %+v", definition)
+	}
+	agent.mu.Lock()
+	calls := agent.schemaCalls
+	agent.mu.Unlock()
+	if calls == 0 {
+		t.Fatal("provider schema was not fetched from the agent")
+	}
+}
+
 func TestRefreshProviderManifestReplacesCachedProviders(t *testing.T) {
 	svc, server, agent := newTestServerWithAgent(t)
 	agent.awg = true
@@ -109,7 +132,7 @@ func TestWaitForProviderLifecycle(t *testing.T) {
 	}
 }
 
-func TestMigratedSecretUsesActionAndIsDeletedAfterAcceptance(t *testing.T) {
+func TestSyncedSecretUsesActionAndRemainsInAdminDB(t *testing.T) {
 	svc, server, agent := newTestServerWithAgent(t)
 	item := models.Resource{ID: "pending-peer", ServerID: server.ID.String(), APIVersion: "test/v1", Kind: "Service", Name: "alice-laptop", Generation: 1, Spec: json.RawMessage(`{"publicKey":"public"}`), Status: models.ResourceStatus{Conditions: []models.Condition{{Type: "Secrets", Status: models.ConditionFalse, Reason: "SecretMigrationPending"}}}}
 	if err := svc.saveProviderResource(server.ID.String(), item); err != nil {
@@ -125,11 +148,72 @@ func TestMigratedSecretUsesActionAndIsDeletedAfterAcceptance(t *testing.T) {
 	if agent.actionCalls != 1 || !strings.Contains(string(agent.actionArguments), `"privateKey":"private"`) || strings.Contains(string(agent.actionArguments), "resourceId") {
 		t.Fatalf("secret action arguments = %s, calls=%d", agent.actionArguments, agent.actionCalls)
 	}
-	if _, err := svc.store.Secrets().Get(item.ID); !storage.IsNotFound(err) {
-		t.Fatalf("accepted migration secret was not deleted: %v", err)
+	secret, err := svc.store.Secrets().Get(item.ID)
+	if err != nil || secret.PrivateKey != "private" || secret.PresharedKey != "psk" {
+		t.Fatalf("synced secret was not preserved: %+v, %v", secret, err)
 	}
 	if strings.Contains(string(resources[0].Spec), "private") {
 		t.Fatal("private key leaked into resource spec")
+	}
+}
+
+func TestSecretSyncUsesLiveSchemaWithStaleCachedActions(t *testing.T) {
+	for _, kind := range []string{"Interface", "Peer"} {
+		t.Run(kind, func(t *testing.T) {
+			svc, server, agent := newTestServerWithAgent(t)
+			record := &models.ProviderRecord{ServerID: server.ID.String(), Installed: true, Definition: models.ProviderDefinition{Name: "test", Version: "1", Resources: []models.ResourceDefinition{{APIVersion: "test/v1", Kind: kind, SpecSchema: json.RawMessage(`{"type":"object"}`), SchemaHash: "hash"}}}}
+			if err := svc.store.Providers().Set(record); err != nil {
+				t.Fatal(err)
+			}
+			item := models.Resource{ID: "pending-" + kind, ServerID: server.ID.String(), APIVersion: "test/v1", Kind: kind, Name: "resource", Generation: 1, Spec: json.RawMessage(`{}`), Status: models.ResourceStatus{Conditions: []models.Condition{{Type: "Secrets", Reason: "SecretMigrationPending"}}}}
+			if err := svc.saveProviderResource(server.ID.String(), item); err != nil {
+				t.Fatal(err)
+			}
+			if err := svc.store.Secrets().Set(&models.ResourceSecret{ResourceID: item.ID, ServerID: server.ID.String(), PrivateKey: "private"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := svc.ListProviderResources(server.ID.String(), "test"); err != nil {
+				t.Fatal(err)
+			}
+			if agent.actionCalls != 1 || !strings.Contains(string(agent.actionArguments), `"privateKey":"private"`) {
+				t.Fatalf("live schema did not restore secret: calls=%d, arguments=%s", agent.actionCalls, agent.actionArguments)
+			}
+		})
+	}
+}
+
+func TestProviderPendingFlagRestoresSecretFromAdminDB(t *testing.T) {
+	svc, server, agent := newTestServerWithAgent(t)
+	item := models.Resource{ID: "pending-peer", ServerID: server.ID.String(), APIVersion: "test/v1", Kind: "Service", Name: "alice-laptop", Generation: 1, Spec: json.RawMessage(`{"publicKey":"public"}`), Status: models.ResourceStatus{Provider: json.RawMessage(`{"secretMigrationPending":true}`)}}
+	if err := svc.saveProviderResource(server.ID.String(), item); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.store.Secrets().Set(&models.ResourceSecret{ResourceID: item.ID, ServerID: server.ID.String(), PrivateKey: "private", PresharedKey: "psk"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ListProviderResources(server.ID.String(), "test"); err != nil {
+		t.Fatal(err)
+	}
+	if agent.actionCalls != 1 || !strings.Contains(string(agent.actionArguments), `"privateKey":"private"`) || !strings.Contains(string(agent.actionArguments), `"presharedKey":"psk"`) {
+		t.Fatalf("stored secrets were not pushed: calls=%d, arguments=%s", agent.actionCalls, agent.actionArguments)
+	}
+	secret, err := svc.store.Secrets().Get(item.ID)
+	if err != nil || secret.PrivateKey != "private" || secret.PresharedKey != "psk" {
+		t.Fatalf("synced secret was not preserved: %+v, %v", secret, err)
+	}
+}
+
+func TestMissingSecretDoesNotBlockResourceSync(t *testing.T) {
+	svc, server, agent := newTestServerWithAgent(t)
+	item := models.Resource{ID: "peer-without-secret", ServerID: server.ID.String(), APIVersion: "test/v1", Kind: "Service", Name: "alice-laptop", Generation: 1, Spec: json.RawMessage(`{}`), Status: models.ResourceStatus{Provider: json.RawMessage(`{"secretMigrationPending":true}`)}}
+	if err := svc.saveProviderResource(server.ID.String(), item); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ListProviderResources(server.ID.String(), "test"); err != nil {
+		t.Fatalf("missing secret blocked sync: %v", err)
+	}
+	if agent.actionCalls != 0 {
+		t.Fatalf("missing secret triggered %d actions", agent.actionCalls)
 	}
 }
 
@@ -226,6 +310,7 @@ func TestDeleteProviderInterfaceRejectsDependencies(t *testing.T) {
 func TestPendingSecretRequiresProviderAction(t *testing.T) {
 	svc, server, agent := newTestServerWithAgent(t)
 	agent.awg = false
+	agent.withoutActions = true
 	item := models.Resource{ID: uuid.New().String(), ServerID: server.ID.String(), APIVersion: "awg.ks-tool.dev/v1", Kind: "Interface", Name: "awg0", Spec: []byte(`{}`), Status: models.ResourceStatus{Conditions: []models.Condition{{Type: "Secrets", Reason: "SecretMigrationPending"}}}}
 	if err := svc.saveProviderResource(server.ID.String(), item); err != nil {
 		t.Fatal(err)
@@ -237,7 +322,7 @@ func TestPendingSecretRequiresProviderAction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.migrateProviderResourceSecret(server.ID.String(), definition, item); err == nil {
+	if err := svc.syncProviderResourceSecret(server.ID.String(), definition, item); err == nil {
 		t.Fatal("pending secret was accepted without importSecret action")
 	}
 	if _, err := svc.store.Secrets().Get(item.ID); err != nil {
@@ -288,23 +373,388 @@ func TestRenderProviderClientConfigIncludesTextAndQRCode(t *testing.T) {
 	}
 }
 
-func TestWaitForServerProvidersBeforeSync(t *testing.T) {
+func TestResourcesUseProviderReconcileOrder(t *testing.T) {
+	definition := &models.ProviderDefinition{Resources: []models.ResourceDefinition{
+		{Kind: "Interface", ReconcileOrder: 0},
+		{Kind: "Other", ReconcileOrder: 50},
+		{Kind: "Peer", ReconcileOrder: 100},
+	}}
+	resources := []models.Resource{
+		{Kind: "Peer", Name: "peer"},
+		{Kind: "Other", Name: "b"},
+		{Kind: "Interface", Name: "interface"},
+		{Kind: "Other", Name: "a"},
+	}
+	sortProviderResources(resources, definition)
+	got := make([]string, 0, len(resources))
+	for _, item := range resources {
+		got = append(got, item.Name)
+	}
+	expected := []string{"interface", "a", "b", "peer"}
+	for index := range expected {
+		if got[index] != expected[index] {
+			t.Fatalf("resource order = %v", got)
+		}
+	}
+}
+
+func TestSyncPushesLocalSpecInsteadOfOverwriting(t *testing.T) {
 	svc, server, agent := newTestServerWithAgent(t)
-	item := models.Resource{ID: uuid.New().String(), ServerID: server.ID.String(), APIVersion: "awg.ks-tool.dev/v1", Kind: "Interface", Name: "awg0", Spec: json.RawMessage(`{"iface":"awg0"}`)}
+	agent.awg = true
+	local := models.Resource{ID: uuid.New().String(), ServerID: server.ID.String(), APIVersion: "awg.ks-tool.dev/v1", Kind: "Interface", Name: "awg0", Generation: 1, Spec: json.RawMessage(`{"iface":"awg0","addr":"10.0.0.1/24"}`)}
+	if err := svc.saveProviderResource(server.ID.String(), local); err != nil {
+		t.Fatal(err)
+	}
+	remote := local
+	remote.Generation = 3
+	remote.Spec = json.RawMessage(`{"iface":"awg0","addr":"10.9.0.1/24"}`)
+	remote.Status = models.ResourceStatus{ObservedGeneration: 3, Phase: models.ResourceReady}
+	agent.resources["Interface/awg0"] = remote
+	if _, err := svc.ListProviderResources(server.ID.String(), "awg"); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := svc.store.Resources(server.ID).Get(local.ID)
+	if err != nil || string(stored.Spec) != string(local.Spec) {
+		t.Fatalf("remote spec overwrote local desired state: %+v, %v", stored, err)
+	}
+	if stored.Generation != 4 || string(agent.resources["Interface/awg0"].Spec) != string(local.Spec) {
+		t.Fatalf("local desired state was not pushed: local=%+v remote=%+v", stored, agent.resources["Interface/awg0"])
+	}
+}
+
+func TestSyncRejectsResourceIDConflict(t *testing.T) {
+	svc, server, agent := newTestServerWithAgent(t)
+	agent.awg = true
+	local := models.Resource{ID: uuid.New().String(), ServerID: server.ID.String(), APIVersion: "awg.ks-tool.dev/v1", Kind: "Interface", Name: "awg0", Generation: 1, Spec: json.RawMessage(`{"iface":"awg0"}`)}
+	if err := svc.saveProviderResource(server.ID.String(), local); err != nil {
+		t.Fatal(err)
+	}
+	remote := local
+	remote.ID = uuid.New().String()
+	remote.Status = models.ResourceStatus{ObservedGeneration: 1, Phase: models.ResourceReady}
+	agent.resources["Interface/awg0"] = remote
+	if _, err := svc.ListProviderResources(server.ID.String(), "awg"); err == nil || !strings.Contains(err.Error(), "resource id") {
+		t.Fatalf("resource identity conflict = %v", err)
+	}
+}
+
+func resourceTestPublicKey(key awgmodels.Key) string {
+	publicKey := key.PublicKey()
+	return publicKey.String()
+}
+
+func TestAdoptionPushesManagedSpecBeforeSecret(t *testing.T) {
+	svc, server, agent := newTestServerWithAgent(t)
+	agent.awg = true
+	agent.preserveUpdateStatus = true
+	agent.validatePeerSecrets = true
+	privateKey, err := awgmodels.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherKey, err := awgmodels.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := uuid.New().String()
+	localSpec := json.RawMessage(`{"name":"alice","interfaceRef":"interface-id","publicKey":"` + resourceTestPublicKey(privateKey) + `","allowedIPs":["10.0.0.2/32"]}`)
+	remoteSpec := json.RawMessage(`{"name":"alice","interfaceRef":"interface-id","publicKey":"` + resourceTestPublicKey(otherKey) + `","allowedIPs":["10.0.0.2/32"]}`)
+	local := models.Resource{
+		ID: id, ServerID: server.ID.String(), APIVersion: "awg.ks-tool.dev/v1", Kind: "Peer", Name: "alice", Generation: 1, Spec: localSpec,
+		Status: models.ResourceStatus{Phase: models.ResourcePending, Conditions: []models.Condition{{Type: "Secrets", Reason: "SecretMigrationPending"}}},
+	}
+	if err := svc.saveProviderResource(server.ID.String(), local); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.store.Secrets().Set(&models.ResourceSecret{ResourceID: id, ServerID: server.ID.String(), PrivateKey: privateKey.String()}); err != nil {
+		t.Fatal(err)
+	}
+	remote := local
+	remote.Spec = remoteSpec
+	remote.Status = models.ResourceStatus{ObservedGeneration: 1, Phase: models.ResourceReady}
+	agent.resources["Peer/alice"] = remote
+
+	if _, err := svc.listProviderResources(server.ID.String(), "awg", true); err != nil {
+		t.Fatalf("adoption rejected the managed peer secret: %v", err)
+	}
+	if agent.actionCalls != 1 {
+		t.Fatalf("peer secret imports = %d", agent.actionCalls)
+	}
+	if got := agent.resources["Peer/alice"].Spec; string(got) != string(localSpec) {
+		t.Fatalf("remote managed spec was not replaced: %s", got)
+	}
+}
+
+func TestProviderDeploymentSyncAdoptsUnmanagedPeerWithCanonicalID(t *testing.T) {
+	svc, server, agent := newTestServerWithAgent(t)
+	server.Unmanaged = true
+	if err := svc.store.Servers().Set(server); err != nil {
+		t.Fatal(err)
+	}
+	agent.awg = true
+	agent.validatePeerSecrets = true
+	privateKey, err := awgmodels.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteKey, err := awgmodels.GeneratePrivateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	localID := uuid.New().String()
+	localSpec := json.RawMessage(`{"name":"iphone","interfaceRef":"interface-id","publicKey":"` + resourceTestPublicKey(privateKey) + `","allowedIPs":["10.0.0.2/32"]}`)
+	remoteSpec := json.RawMessage(`{"name":"iphone","interfaceRef":"interface-id","publicKey":"` + resourceTestPublicKey(remoteKey) + `","allowedIPs":["10.0.0.2/32"]}`)
+	local := models.Resource{
+		ID: localID, ServerID: server.ID.String(), APIVersion: "awg.ks-tool.dev/v1", Kind: "Peer", Name: "iphone", Generation: 1, Spec: localSpec,
+		Status: models.ResourceStatus{Phase: models.ResourcePending, Conditions: []models.Condition{{Type: "Secrets", Reason: "SecretMigrationPending"}}},
+	}
+	if err := svc.saveProviderResource(server.ID.String(), local); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.store.Secrets().Set(&models.ResourceSecret{ResourceID: localID, ServerID: server.ID.String(), PrivateKey: privateKey.String()}); err != nil {
+		t.Fatal(err)
+	}
+	remote := local
+	remote.ID = uuid.New().String()
+	remote.Spec = remoteSpec
+	remote.Status = models.ResourceStatus{ObservedGeneration: 1, Phase: models.ResourceReady}
+	agent.resources["Peer/iphone"] = remote
+
+	if err := svc.syncServerAndLinks(server.ID.String()); err != nil {
+		t.Fatalf("provider deployment sync failed: %v", err)
+	}
+	created := agent.resources["Peer/iphone"]
+	if created.ID != localID || string(created.Spec) != string(localSpec) {
+		t.Fatalf("canonical peer was not restored: %+v", created)
+	}
+	if agent.actionCalls != 1 {
+		t.Fatalf("peer secret imports = %d", agent.actionCalls)
+	}
+	storedServer, err := svc.store.Servers().Get(server.ID)
+	if err != nil || storedServer.Unmanaged {
+		t.Fatalf("server migration did not complete: %+v, %v", storedServer, err)
+	}
+}
+
+func TestSyncWaitsForServerMigration(t *testing.T) {
+	svc, server, agent := newTestServerWithAgent(t)
+	server.Unmanaged = true
+	if err := svc.store.Servers().Set(server); err != nil {
+		t.Fatal(err)
+	}
+	agent.awg = true
+	item := models.Resource{ID: uuid.New().String(), ServerID: server.ID.String(), APIVersion: "awg.ks-tool.dev/v1", Kind: "Interface", Name: "awg0", Generation: 1, Spec: json.RawMessage(`{"iface":"awg0"}`)}
 	if err := svc.saveProviderResource(server.ID.String(), item); err != nil {
 		t.Fatal(err)
 	}
-	agent.awg = false
+	migrationApplying := make(chan struct{})
+	concurrentPut := make(chan struct{}, 1)
+	releaseMigration := make(chan struct{})
+	var migrationBlocked atomic.Bool
+	agent.beforePut = func(_ int, _ string, _ models.Resource) {
+		if migrationBlocked.CompareAndSwap(false, true) {
+			close(migrationApplying)
+			<-releaseMigration
+			return
+		}
+		select {
+		case concurrentPut <- struct{}{}:
+		default:
+		}
+	}
+	migrationDone := make(chan error, 1)
 	go func() {
-		time.Sleep(50 * time.Millisecond)
-		agent.mu.Lock()
-		agent.awg = true
-		agent.mu.Unlock()
+		migrationServer := *server
+		migrationDone <- svc.completeServerMigration(&migrationServer)
 	}()
-	if err := svc.waitForServerProviders(server.ID.String(), time.Second); err != nil {
+	<-migrationApplying
+	syncDone := make(chan error, 1)
+	go func() { syncDone <- svc.SyncServer(server.ID.String()) }()
+
+	syncFinishedEarly := false
+	syncReturned := false
+	select {
+	case <-concurrentPut:
+		syncFinishedEarly = true
+	case err := <-syncDone:
+		syncFinishedEarly = true
+		syncReturned = true
+		if err != nil {
+			t.Errorf("concurrent sync failed: %v", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(releaseMigration)
+	if err := <-migrationDone; err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
+	if !syncReturned {
+		select {
+		case err := <-syncDone:
+			if err != nil {
+				t.Fatalf("sync failed: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("sync did not finish after migration")
+		}
+	}
+	if syncFinishedEarly {
+		t.Fatal("sync ran concurrently with server migration")
+	}
+}
+
+func TestAdoptionImportsRemoteInventory(t *testing.T) {
+	svc, server, agent := newTestServerWithAgent(t)
+	server.Unmanaged = true
+	if err := svc.store.Servers().Set(server); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.SyncServer(server.ID.String()); err != nil {
-		t.Fatalf("sync after provider registration: %v", err)
+	agent.awg = true
+	remote := models.Resource{ID: uuid.New().String(), ServerID: server.ID.String(), APIVersion: "awg.ks-tool.dev/v1", Kind: "Interface", Name: "awg0", Generation: 1, Spec: json.RawMessage(`{"iface":"awg0"}`), Status: models.ResourceStatus{ObservedGeneration: 1, Phase: models.ResourceReady}}
+	agent.resources["Interface/awg0"] = remote
+	if err := svc.completeServerMigration(server); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := svc.store.Resources(server.ID).Get(remote.ID)
+	if err != nil || stored.Name != remote.Name {
+		t.Fatalf("remote inventory was not adopted: %+v, %v", stored, err)
+	}
+}
+
+func TestSecretRestoreRetryUsesCanonicalOpaquePayload(t *testing.T) {
+	svc, server, agent := newTestServerWithAgent(t)
+	item := models.Resource{ID: "canonical-peer", ServerID: server.ID.String(), APIVersion: "test/v1", Kind: "Peer", Name: "alice", Generation: 1, Spec: json.RawMessage(`{}`), Status: models.ResourceStatus{Conditions: []models.Condition{{Type: "Secrets", Reason: "SecretMigrationPending"}}}}
+	if err := svc.saveProviderResource(server.ID.String(), item); err != nil {
+		t.Fatal(err)
+	}
+	secret := &models.ResourceSecret{ResourceID: item.ID, ServerID: server.ID.String(), Arguments: json.RawMessage(`{"presharedKey":"opaque"}`), PresharedKey: "legacy"}
+	if err := svc.store.Secrets().Set(secret); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		pending, err := svc.store.Resources(server.ID).Get(item.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pending.Status.Conditions = []models.Condition{{Type: "Secrets", Reason: "SecretMigrationPending"}}
+		if err := svc.saveProviderResource(server.ID.String(), *pending); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := svc.ListProviderResources(server.ID.String(), "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if agent.actionCalls != 2 || string(agent.actionArguments) != string(secret.Arguments) {
+		t.Fatalf("secret retry payload = %s, calls=%d", agent.actionArguments, agent.actionCalls)
+	}
+	stored, err := svc.store.Secrets().Get(item.ID)
+	if err != nil || string(stored.Arguments) != string(secret.Arguments) {
+		t.Fatalf("opaque secret was not preserved: %+v, %v", stored, err)
+	}
+}
+
+func TestSyncRecreatesEditedResourceAndRestoresSecret(t *testing.T) {
+	svc, server, agent := newTestServerWithAgent(t)
+	agent.strictGenerations = true
+	agent.pendingCreates = true
+	item := models.Resource{ID: "edited-peer", ServerID: server.ID.String(), APIVersion: "test/v1", Kind: "Peer", Name: "alice", Generation: 2, Spec: json.RawMessage(`{"revision":2}`), Status: models.ResourceStatus{ObservedGeneration: 2, Phase: models.ResourceReady}}
+	if err := svc.saveProviderResource(server.ID.String(), item); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.store.Secrets().Set(&models.ResourceSecret{ResourceID: item.ID, ServerID: server.ID.String(), Arguments: json.RawMessage(`{"presharedKey":"secret"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ListProviderResources(server.ID.String(), "test"); err != nil {
+		t.Fatalf("recreate edited resource: %v", err)
+	}
+	created := agent.resources["Peer/alice"]
+	if created.Generation != 1 || created.ID != item.ID {
+		t.Fatalf("recreated resource = %+v", created)
+	}
+	if agent.actionCalls != 1 || string(agent.actionArguments) != `{"presharedKey":"secret"}` {
+		t.Fatalf("secret was not restored after create: calls=%d payload=%s", agent.actionCalls, agent.actionArguments)
+	}
+}
+
+func TestSyncHonorsRemoteSecretPending(t *testing.T) {
+	svc, server, agent := newTestServerWithAgent(t)
+	item := models.Resource{ID: "ready-peer", ServerID: server.ID.String(), APIVersion: "test/v1", Kind: "Peer", Name: "alice", Generation: 1, Spec: json.RawMessage(`{}`), Status: models.ResourceStatus{ObservedGeneration: 1, Phase: models.ResourceReady}}
+	if err := svc.saveProviderResource(server.ID.String(), item); err != nil {
+		t.Fatal(err)
+	}
+	remote := item
+	remote.Status.Provider = json.RawMessage(`{"secretMigrationPending":true}`)
+	agent.resources["Peer/alice"] = remote
+	if err := svc.store.Secrets().Set(&models.ResourceSecret{ResourceID: item.ID, ServerID: server.ID.String(), Arguments: json.RawMessage(`{"presharedKey":"secret"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ListProviderResources(server.ID.String(), "test"); err != nil {
+		t.Fatal(err)
+	}
+	if agent.actionCalls != 1 {
+		t.Fatalf("remote pending secret was ignored: %d", agent.actionCalls)
+	}
+}
+
+func TestPutDoesNotAdoptRemoteOnly(t *testing.T) {
+	svc, server, agent := newTestServerWithAgent(t)
+	agent.awg = true
+	remote := models.Resource{ID: uuid.New().String(), ServerID: server.ID.String(), APIVersion: "awg.ks-tool.dev/v1", Kind: "Peer", Name: "remote-only", Generation: 1, Spec: json.RawMessage(`{}`), Status: models.ResourceStatus{ObservedGeneration: 1, Phase: models.ResourceReady}}
+	agent.resources["Peer/remote-only"] = remote
+	if _, err := svc.PutProviderResource(server.ID.String(), "awg", "Peer", remote.Name, json.RawMessage(`{"changed":true}`)); err == nil || !strings.Contains(err.Error(), "adoption") {
+		t.Fatalf("remote-only PUT error = %v", err)
+	}
+	if _, err := svc.store.Resources(server.ID).Get(remote.ID); !storage.IsNotFound(err) {
+		t.Fatalf("remote-only resource was adopted by PUT: %v", err)
+	}
+}
+
+func TestAdminPutLostResponseRetryDoesNotRollback(t *testing.T) {
+	svc, server, agent := newTestServerWithAgent(t)
+	agent.awg = true
+	agent.strictGenerations = true
+	local := models.Resource{ID: uuid.New().String(), ServerID: server.ID.String(), APIVersion: "awg.ks-tool.dev/v1", Kind: "Interface", Name: "awg0", Generation: 1, Spec: json.RawMessage(`{"revision":"old"}`)}
+	if err := svc.saveProviderResource(server.ID.String(), local); err != nil {
+		t.Fatal(err)
+	}
+	remote := local
+	remote.Generation = 2
+	remote.Spec = json.RawMessage(`{"revision":"requested"}`)
+	remote.Status = models.ResourceStatus{ObservedGeneration: 2, Phase: models.ResourceReady}
+	agent.resources["Interface/awg0"] = remote
+	updated, err := svc.PutProviderResource(server.ID.String(), "awg", "Interface", local.Name, remote.Spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(agent.putSpecs) != 1 || string(agent.putSpecs[0]) != string(remote.Spec) {
+		t.Fatalf("retry rolled back and reapplied spec: %s", agent.putSpecs)
+	}
+	stored, err := svc.store.Resources(server.ID).Get(local.ID)
+	if err != nil || string(stored.Spec) != string(updated.Spec) {
+		t.Fatalf("retry result was not saved: %+v, %v", stored, err)
+	}
+}
+
+func TestSecretRestoreRetriesSameCanonicalResourceAfterActionFailure(t *testing.T) {
+	svc, server, agent := newTestServerWithAgent(t)
+	agent.actionFailures = 1
+	item := models.Resource{ID: "canonical-peer", ServerID: server.ID.String(), APIVersion: "test/v1", Kind: "Peer", Name: "alice", Generation: 1, Spec: json.RawMessage(`{}`), Status: models.ResourceStatus{Conditions: []models.Condition{{Type: "Secrets", Reason: "SecretMigrationPending"}}}}
+	if err := svc.saveProviderResource(server.ID.String(), item); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.store.Secrets().Set(&models.ResourceSecret{ResourceID: item.ID, ServerID: server.ID.String(), Arguments: json.RawMessage(`{"presharedKey":"opaque"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ListProviderResources(server.ID.String(), "test"); err == nil {
+		t.Fatal("action failure was ignored")
+	}
+	if _, err := svc.ListProviderResources(server.ID.String(), "test"); err != nil {
+		t.Fatalf("secret retry: %v", err)
+	}
+	if len(agent.actionResources) != 2 || agent.actionResources[0] != "Peer/alice" || agent.actionResources[1] != "Peer/alice" {
+		t.Fatalf("secret retry resources = %v", agent.actionResources)
+	}
+	if string(agent.actionArguments) != `{"presharedKey":"opaque"}` {
+		t.Fatalf("secret retry payload = %s", agent.actionArguments)
 	}
 }

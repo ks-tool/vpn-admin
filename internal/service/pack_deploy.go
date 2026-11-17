@@ -72,17 +72,19 @@ func (s *Service) DeployAgentPack(id string, deployment models.AgentDeployment) 
 			s.deployStatus.setStep(sID, step)
 		})
 		if err == nil {
-			err = s.waitForServerProviders(id, 20*time.Second)
+			err = s.markAgentInstalled(srv)
 		}
 		s.deployStatus.finish(sID, err)
 		if err != nil {
-			return
-		}
-		if err := s.SyncServer(id); err != nil {
-			log.Warn().Err(err).Str("server_id", id).Msg("failed to sync server after pack deployment")
+			log.Warn().Err(err).Str("server_id", id).Msg("failed to deploy agent pack")
 		}
 	}()
 	return nil
+}
+
+func (s *Service) markAgentInstalled(server *models.Server) error {
+	server.Agent.Installed = true
+	return s.store.Servers().Set(server)
 }
 
 func (s *Service) DeployProvider(id string, provider models.ProviderDeployment, registry models.Registry) error {
@@ -127,11 +129,11 @@ func (s *Service) DeployProvider(id string, provider models.ProviderDeployment, 
 		if err == nil {
 			err = s.waitForProvider(id, provider.Name, 20*time.Second)
 		}
+		if err == nil {
+			err = s.syncServerAndLinks(id)
+		}
 		s.deployStatus.finish(sID, err)
 		if err != nil {
-			return
-		}
-		if err := s.SyncServer(id); err != nil {
 			log.Warn().Err(err).Str("server_id", id).Str("provider", provider.Name).Msg("failed to sync server after provider deployment")
 		}
 	}()
@@ -159,11 +161,6 @@ func (s *Service) RemoveProvider(id, name string) error {
 			err = s.removeCachedProvider(sID, name)
 		}
 		s.deployStatus.finish(sID, err)
-		if err == nil {
-			if err := s.SyncServer(id); err != nil {
-				log.Warn().Err(err).Str("server_id", id).Str("provider", name).Msg("failed to sync server after provider removal")
-			}
-		}
 	}()
 	return nil
 }

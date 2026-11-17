@@ -44,10 +44,10 @@ import (
 // the mTLS material written into it (method-specific paths live in systemd.go /
 // docker.go).
 const (
-	remoteConfigDir      = "/etc/vpn-agent"
-	remoteCACertPath     = "/etc/vpn-agent/ca.pem"
-	remoteServerCertPath = "/etc/vpn-agent/server.pem"
-	remoteServerKeyPath  = "/etc/vpn-agent/server-key.pem"
+	remoteConfigDir      = "/var/lib/vpn-agent"
+	remoteCACertPath     = "/var/lib/vpn-agent/ca.pem"
+	remoteServerCertPath = "/var/lib/vpn-agent/server.pem"
+	remoteServerKeyPath  = "/var/lib/vpn-agent/server-key.pem"
 )
 
 // stepFunc reports (and logs) the current deploy step; failFunc logs and
@@ -97,7 +97,7 @@ func ToAgent(ctx context.Context, srv models.Server, src models.AgentSource, udp
 	}
 	defer func() { _ = client.Close() }()
 
-	// A non-root SSH user can't write /usr/local/bin, /etc/systemd, /etc/vpn-agent
+	// A non-root SSH user can't write /usr/local/bin, /etc/systemd, /var/lib/vpn-agent
 	// or drive systemctl/docker directly — escalate every privileged remote
 	// command with sudo. resolveSudo probes the host and, if sudo needs a
 	// password we don't have, returns *SudoPasswordRequiredError for the frontend

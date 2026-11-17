@@ -29,15 +29,18 @@ import (
 
 func (c *Client) Manifest(ctx context.Context) (*models.Manifest, error) {
 	var manifest models.Manifest
-	if err := c.resourceRequest(ctx, http.MethodGet, "/v1/manifest", nil, &manifest); err != nil {
+	if err := c.resourceRequest(ctx, http.MethodGet, "/v2/manifest", nil, &manifest); err != nil {
 		return nil, err
+	}
+	if manifest.ProtocolVersion != models.ProtocolVersion {
+		return nil, fmt.Errorf("unsupported agent protocol %q; upgrade agent and providers to %s", manifest.ProtocolVersion, models.ProtocolVersion)
 	}
 	return &manifest, nil
 }
 
 func (c *Client) ProviderSchema(ctx context.Context, provider string) (*models.ProviderDefinition, error) {
 	var definition models.ProviderDefinition
-	path := "/v1/providers/" + url.PathEscape(provider) + "/schema"
+	path := "/v2/providers/" + url.PathEscape(provider) + "/schema"
 	if err := c.resourceRequest(ctx, http.MethodGet, path, nil, &definition); err != nil {
 		return nil, err
 	}
@@ -46,7 +49,7 @@ func (c *Client) ProviderSchema(ctx context.Context, provider string) (*models.P
 
 func (c *Client) ListResources(ctx context.Context, provider string) ([]models.Resource, error) {
 	var resources []models.Resource
-	path := "/v1/providers/" + url.PathEscape(provider) + "/resources"
+	path := "/v2/providers/" + url.PathEscape(provider) + "/resources"
 	if err := c.resourceRequest(ctx, http.MethodGet, path, nil, &resources); err != nil {
 		return nil, err
 	}
@@ -86,7 +89,7 @@ func (c *Client) RunResourceAction(ctx context.Context, provider, kind, name, ac
 }
 
 func resourcePath(provider, kind, name string) string {
-	return "/v1/providers/" + url.PathEscape(provider) + "/resources/" + url.PathEscape(kind) + "/" + url.PathEscape(name)
+	return "/v2/providers/" + url.PathEscape(provider) + "/resources/" + url.PathEscape(kind) + "/" + url.PathEscape(name)
 }
 
 func (c *Client) resourceRequest(ctx context.Context, method, path string, input, output any) error {
@@ -127,7 +130,7 @@ func (c *Client) resourceRequest(ctx context.Context, method, path string, input
 
 func (c *Client) PrepareLink(ctx context.Context, provider string, request models.LinkRequest) (*models.LinkOffer, error) {
 	var offer models.LinkOffer
-	path := "/v1/providers/" + url.PathEscape(provider) + "/links/prepare"
+	path := "/v2/providers/" + url.PathEscape(provider) + "/links/prepare"
 	if err := c.resourceRequest(ctx, http.MethodPost, path, request, &offer); err != nil {
 		return nil, err
 	}
@@ -135,11 +138,11 @@ func (c *Client) PrepareLink(ctx context.Context, provider string, request model
 }
 
 func (c *Client) CommitLink(ctx context.Context, provider string, request models.LinkRequest) error {
-	path := "/v1/providers/" + url.PathEscape(provider) + "/links/commit"
+	path := "/v2/providers/" + url.PathEscape(provider) + "/links/commit"
 	return c.resourceRequest(ctx, http.MethodPost, path, request, nil)
 }
 
 func (c *Client) DeleteLink(ctx context.Context, provider string, request models.LinkRequest) error {
-	path := "/v1/providers/" + url.PathEscape(provider) + "/links/delete"
+	path := "/v2/providers/" + url.PathEscape(provider) + "/links/delete"
 	return c.resourceRequest(ctx, http.MethodPost, path, request, nil)
 }

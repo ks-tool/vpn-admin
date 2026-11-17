@@ -97,6 +97,52 @@ func TestDistributedLinkCoordinationAndRecovery(t *testing.T) {
 	}
 }
 
+func TestDeploySyncReappliesReadyLink(t *testing.T) {
+	svc := newTestService(t)
+	serverA, agentA := newLinkTestServer(t, svc, "a")
+	serverB, agentB := newLinkTestServer(t, svc, "b")
+	resourceA := newLinkTestResource(t, svc, serverA)
+	resourceB := newLinkTestResource(t, svc, serverB)
+	link, err := svc.CreateProviderLink(resourceA.ID, resourceB.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.syncServerAndLinks(serverA.ID.String()); err != nil {
+		t.Fatal(err)
+	}
+	agentA.mu.Lock()
+	sourceCommits := agentA.commitCalls
+	agentA.mu.Unlock()
+	agentB.mu.Lock()
+	targetCommits := agentB.commitCalls
+	agentB.mu.Unlock()
+	if sourceCommits != 2 || targetCommits != 2 {
+		t.Fatalf("ready link was not reapplied: commits = %d/%d", sourceCommits, targetCommits)
+	}
+	stored, err := svc.store.Links().Get(link.ID)
+	if err != nil || stored.Status.Phase != models.LinkReady || stored.Status.ObservedGeneration != stored.Generation {
+		t.Fatalf("link is not ready after deployment: %+v, %v", stored, err)
+	}
+}
+
+func TestLinkResolutionFetchesDefinitionsMissingFromCachedManifest(t *testing.T) {
+	svc := newTestService(t)
+	serverA, _ := newLinkTestServer(t, svc, "a")
+	serverB, _ := newLinkTestServer(t, svc, "b")
+	resourceA := newLinkTestResource(t, svc, serverA)
+	resourceB := newLinkTestResource(t, svc, serverB)
+	for _, server := range []*models.Server{serverA, serverB} {
+		record := &models.ProviderRecord{ServerID: server.ID.String(), Definition: models.ProviderDefinition{Name: "test", Version: "1"}, Installed: true}
+		if err := svc.store.Providers().Set(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link, err := svc.CreateProviderLink(resourceA.ID, resourceB.ID)
+	if err != nil || link.Status.Phase != models.LinkReady {
+		t.Fatalf("link with initially empty manifest definitions failed: %+v, %v", link, err)
+	}
+}
+
 func newLinkTestServer(t *testing.T, svc *Service, name string) (*models.Server, *fakeAgentTLS) {
 	t.Helper()
 	ts, tlsMaterial, agent := newFakeAgentTLS(t)
@@ -174,5 +220,33 @@ func TestMoveProviderLink(t *testing.T) {
 	}
 	if len(links) != 1 || links[0].ID != movedSource.ID || links[0].Source.ResourceID != resourceB.ID || links[0].Target.ResourceID != resourceC.ID {
 		t.Fatalf("previous link was not preserved after failed move: %+v", links)
+	}
+}
+
+func TestCoordinateLinkUsesOneGeneration(t *testing.T) {
+	svc := newTestService(t)
+	serverA, agentA := newLinkTestServer(t, svc, "a")
+	serverB, agentB := newLinkTestServer(t, svc, "b")
+	resourceA := newLinkTestResource(t, svc, serverA)
+	resourceB := newLinkTestResource(t, svc, serverB)
+	link, err := svc.CreateProviderLink(resourceA.ID, resourceB.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ApplyProviderLink(link.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, agent := range []*fakeAgentTLS{agentA, agentB} {
+		agent.mu.Lock()
+		prepares := append([]int64(nil), agent.prepareGenerations...)
+		commits := append([]int64(nil), agent.commitGenerations...)
+		offers := append([]int64(nil), agent.offerGenerations...)
+		agent.mu.Unlock()
+		if len(prepares) != 2 || prepares[0] != 1 || prepares[1] != 2 {
+			t.Fatalf("prepare generations = %v", prepares)
+		}
+		if len(commits) != 2 || len(offers) != 2 || commits[0] != offers[0] || commits[1] != offers[1] || commits[0] != 1 || commits[1] != 2 {
+			t.Fatalf("commit/offer generations = %v/%v", commits, offers)
+		}
 	}
 }

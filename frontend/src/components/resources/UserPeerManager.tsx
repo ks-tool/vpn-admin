@@ -175,8 +175,8 @@ export function UserPeerManager({user, servers, resources, onChanged}: UserPeerM
                         const iface = interfaces.find(item => item.id === interfaceRef);
                         const disabled = peer.spec.disabled === true;
                         const detail = details[peer.id];
-                        const pendingSecret = peer.status.conditions?.some(condition => condition.reason === 'SecretMigrationPending') === true;
-                        const actions = detail?.definition.actions?.filter(item => item.name === 'renderClientConfig' || item.name === 'migratePeer' || item.name === 'importSecret' && pendingSecret) ?? [];
+                        const pendingSecret = peer.status.conditions?.some(condition => condition.reason === 'SecretMigrationPending') === true || peer.status.provider?.secretMigrationPending === true;
+                        const actions = detail?.definition.actions?.filter(item => item.name === 'renderClientConfig' && !pendingSecret || item.name === 'migratePeer' || item.name === 'importSecret' && pendingSecret) ?? [];
                         return (
                             <div key={peer.id} className="rounded-lg border border-input bg-background p-4 dark:border-white/10 dark:bg-white/5">
                                 <div className="mb-2 flex items-center justify-between">

@@ -110,7 +110,7 @@ func (c *Client) Metrics(ctx context.Context) (*agentmodels.SystemSnapshot, erro
 // InterfaceMetrics fetches one interface's peer metrics and agent-measured p95 latency.
 func (c *Client) InterfaceMetrics(ctx context.Context, name string) (*awgmodels.InterfaceSnapshot, error) {
 	var snapshot awgmodels.MetricsSnapshot
-	if err := c.interfaceMetricsGet(ctx, "/v1/providers/awg/bridge/metrics", &snapshot); err != nil {
+	if err := c.interfaceMetricsGet(ctx, "/v2/providers/awg/bridge/metrics", &snapshot); err != nil {
 		return nil, err
 	}
 	for index := range snapshot.Interfaces {
@@ -124,7 +124,7 @@ func (c *Client) InterfaceMetrics(ctx context.Context, name string) (*awgmodels.
 // InterfaceMetricsHistory fetches one interface's retained peer history.
 func (c *Client) InterfaceMetricsHistory(ctx context.Context, name string) (*awgmodels.InterfaceHistory, error) {
 	var history awgmodels.SystemHistory
-	if err := c.interfaceMetricsGet(ctx, "/v1/providers/awg/bridge/metrics/history", &history); err != nil {
+	if err := c.interfaceMetricsGet(ctx, "/v2/providers/awg/bridge/metrics/history", &history); err != nil {
 		return nil, err
 	}
 	for index := range history.Interfaces {
@@ -297,10 +297,20 @@ func markIdempotent(req *http.Request) {
 	req.Header.Set("Idempotency-Key", "")
 }
 
+type HTTPError struct {
+	StatusCode int
+	Status     string
+	Body       string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("agent returned %s: %s", e.Status, e.Body)
+}
+
 func responseError(resp *http.Response, name string) error {
 	if resp.StatusCode == http.StatusNotFound && len(name) > 0 {
 		return &NotFoundError{Interface: name}
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	return fmt.Errorf("agent returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	return &HTTPError{StatusCode: resp.StatusCode, Status: resp.Status, Body: strings.TrimSpace(string(body))}
 }

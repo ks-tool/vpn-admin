@@ -29,6 +29,8 @@ import (
 // SyncServer re-applies desired resources. Missing remote resources are created;
 // remote-only resources are never treated as deletion intent during a resync.
 func (s *Service) SyncServer(serverID string) error {
+	unlock := s.lockResourceSync(serverID)
+	defer unlock()
 	log.Info().Str("server_id", serverID).Msg("syncing server configuration")
 	if err := s.syncServer(serverID); err != nil {
 		return err
@@ -51,12 +53,63 @@ func (s *Service) syncServer(serverID string) error {
 		providers[providerFromAPIVersion(resource.APIVersion)] = true
 	}
 	for provider := range providers {
-		if _, err := s.ListProviderResources(serverID, provider); err != nil {
+		if _, err := s.listProviderResources(serverID, provider, false); err != nil {
 			return fmt.Errorf("sync provider %s: %w", provider, err)
 		}
 	}
 	s.syncMonitoringState(id)
 	s.syncProfilingState(id)
+	return nil
+}
+
+func (s *Service) syncServerAndLinks(serverID string) error {
+	unlock := s.lockResourceSync(serverID)
+	defer unlock()
+	server, err := s.agentServer(serverID)
+	if err != nil {
+		return err
+	}
+	if server.Unmanaged {
+		return s.completeServerMigrationLocked(server)
+	}
+	log.Info().Str("server_id", serverID).Msg("syncing server configuration")
+	if err := s.syncServer(serverID); err != nil {
+		return err
+	}
+	log.Info().Str("server_id", serverID).Msg("server configuration synchronized")
+	id, err := uuid.Parse(serverID)
+	if err != nil {
+		return err
+	}
+	resources, err := s.store.Resources(id).List()
+	if err != nil {
+		return err
+	}
+	providers := make(map[string]bool)
+	for _, resource := range resources {
+		providers[providerFromAPIVersion(resource.APIVersion)] = true
+	}
+	for provider := range providers {
+		remote, err := s.listProviderResources(serverID, provider, false)
+		if err != nil {
+			return err
+		}
+		if err := s.waitProviderResourcesReady(serverID, provider, remote); err != nil {
+			return err
+		}
+	}
+	links, err := s.store.Links().List()
+	if err != nil {
+		return err
+	}
+	for _, link := range links {
+		if link.Source.ServerID != serverID && link.Target.ServerID != serverID {
+			continue
+		}
+		if _, err := s.ApplyProviderLink(link.ID); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -69,7 +122,7 @@ func (s *Service) syncTunnelledServers(servers []models.Server, tunnelErrs map[u
 		if _, failed := tunnelErrs[server.ID]; failed {
 			continue
 		}
-		if err := s.syncServer(server.ID.String()); err != nil {
+		if err := s.SyncServer(server.ID.String()); err != nil {
 			log.Warn().Err(err).Str("server_id", server.ID.String()).Msg("failed to sync server after opening tunnel")
 		}
 	}

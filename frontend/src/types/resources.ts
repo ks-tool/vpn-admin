@@ -16,6 +16,7 @@ export interface ResourceDefinition {
     specSchema: Record<string, unknown>;
     uiSchema?: Record<string, unknown>;
     schemaHash: string;
+    reconcileOrder?: number;
     ports?: PortDefinition[];
     actions?: ActionDefinition[];
 }

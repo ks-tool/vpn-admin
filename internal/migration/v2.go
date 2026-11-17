@@ -370,6 +370,9 @@ func migrateInterface(server models.Server, iface v1Interface) (models.Resource,
 	status.Conditions = append(status.Conditions, pendingSecretCondition())
 	resource := models.Resource{ID: iface.ID.String(), ServerID: server.ID.String(), APIVersion: "awg.ks-tool.dev/v1", Kind: "Interface", Name: iface.Interface, Generation: 1, Spec: raw, Status: status}
 	secret := models.ResourceSecret{ResourceID: resource.ID, ServerID: server.ID.String(), PrivateKey: iface.PrivateKey.String(), PreUp: iface.PreUp, PostUp: iface.PostUp, PreDown: iface.PreDown, PostDown: iface.PostDown}
+	if err := setMigrationSecretArguments(&secret); err != nil {
+		return models.Resource{}, models.ResourceSecret{}, err
+	}
 	return resource, secret, nil
 }
 
@@ -413,6 +416,10 @@ func migrateEmbeddedPeers(source, target *bolt.Tx, data inventory) error {
 	}); err != nil {
 		return err
 	}
+	interfaceKeys := make(map[string]bool)
+	for _, iface := range data.interfaces {
+		interfaceKeys[keyString(iface.PrivateKey.PublicKey())] = true
+	}
 	for _, iface := range data.interfaces {
 		for _, peer := range iface.Peers {
 			key := iface.ID.String() + ":" + peer.Key.String()
@@ -420,13 +427,21 @@ func migrateEmbeddedPeers(source, target *bolt.Tx, data inventory) error {
 				continue
 			}
 			id := models.NewDeterministicUUID("embedded:" + key)
+			tunnelPeer := interfaceKeys[peer.Key.String()]
+			name := "Imported peer"
+			if tunnelPeer {
+				name = "Tunnel peer"
+			}
 			values := map[string]any{
-				"name": "Imported peer", "interfaceRef": iface.ID.String(), "publicKey": peer.Key.String(),
+				"name": name, "interfaceRef": iface.ID.String(), "publicKey": peer.Key.String(),
 				"allowedIPs": peer.AllowedIPs, "disabled": peer.Disabled, "keepaliveSeconds": int(peer.KeepaliveInterval.Seconds()),
 			}
 			resource, secret, err := newPeerResource(id, data.owners[iface.ID], values, "", peer.PresharedKey)
 			if err != nil {
 				return err
+			}
+			if tunnelPeer {
+				resource.Name = "tunnel-" + iface.ID.String()
 			}
 			if err := put(target.Bucket(bucketResources), []byte(resource.ID), &resource); err != nil {
 				return err
@@ -464,7 +479,34 @@ func newPeerResource(id uuid.UUID, server models.Server, values map[string]any, 
 		resourceName = userRef + "-" + resourceName
 	}
 	resource := models.Resource{ID: id.String(), ServerID: server.ID.String(), APIVersion: "awg.ks-tool.dev/v1", Kind: "Peer", Name: resourceName, Generation: 1, Spec: spec, Status: status}
+	if err := setMigrationSecretArguments(&secret); err != nil {
+		return models.Resource{}, models.ResourceSecret{}, err
+	}
 	return resource, secret, nil
+}
+
+func setMigrationSecretArguments(secret *models.ResourceSecret) error {
+	values := make(map[string]any)
+	if len(secret.PrivateKey) > 0 {
+		values["privateKey"] = secret.PrivateKey
+	}
+	if len(secret.PresharedKey) > 0 {
+		values["presharedKey"] = secret.PresharedKey
+	}
+	for field, hooks := range map[string][]string{"preUp": secret.PreUp, "postUp": secret.PostUp, "preDown": secret.PreDown, "postDown": secret.PostDown} {
+		if len(hooks) > 0 {
+			values[field] = hooks
+		}
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	arguments, err := json.Marshal(values)
+	if err != nil {
+		return err
+	}
+	secret.Arguments = arguments
+	return nil
 }
 
 func migrateLinks(target *bolt.Tx, data inventory) error {

@@ -47,23 +47,22 @@ func TestPeerOfDisabledUserIsDisabledByBackend(t *testing.T) {
 	}
 }
 
-func TestInterfaceRenameIsRejectedWithoutChangingResource(t *testing.T) {
+func TestGenericInterfaceValidationDoesNotReadAWGFields(t *testing.T) {
 	svc, server, agent := newTestServerWithAgent(t)
-	created, err := svc.PutProviderResource(server.ID.String(), "test", "Interface", "test0", json.RawMessage(`{"name":"test0","addr":"10.0.0.1/24"}`))
+	created, err := svc.PutProviderResource(server.ID.String(), "test", "Interface", "test0", json.RawMessage(`{"name":"old","iface":"awg0","addr":"10.0.0.1/24"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := append(json.RawMessage(nil), created.Spec...)
-	_, err = svc.PutProviderResource(server.ID.String(), "test", "Interface", "test0", json.RawMessage(`{"name":"renamed","addr":"10.0.0.2/24"}`))
-	if err == nil {
-		t.Fatal("interface identity rename was accepted")
+	updated, err := svc.PutProviderResource(server.ID.String(), "test", "Interface", "test0", json.RawMessage(`{"name":"renamed","iface":"awg1","addr":"10.0.0.2/24"}`))
+	if err != nil {
+		t.Fatalf("generic layer interpreted provider fields: %v", err)
 	}
 	stored, err := svc.store.Resources(server.ID).Get(created.ID)
-	if err != nil || string(stored.Spec) != string(before) {
-		t.Fatalf("resource changed after rejected rename: %+v, %v", stored, err)
+	if err != nil || string(stored.Spec) != string(updated.Spec) {
+		t.Fatalf("provider spec was not updated: %+v, %v", stored, err)
 	}
-	if len(agent.putOrder) != 1 {
-		t.Fatalf("rejected rename reached provider: %v", agent.putOrder)
+	if len(agent.putOrder) != 2 {
+		t.Fatalf("provider did not receive update: %v", agent.putOrder)
 	}
 }
 

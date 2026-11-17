@@ -17,6 +17,7 @@
 package vpnagent
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/horchestra/pack/sdk"
@@ -27,25 +28,40 @@ import (
 func TestPackGenerates(t *testing.T) {
 	config := &Config{}
 	config.SetDefaults()
+	if readiness := config.PackRoot().Readiness; readiness == nil || readiness.HTTP != "agent/v2/manifest" {
+		t.Fatalf("agent readiness = %+v", readiness)
+	}
 	if _, err := sdk.Schema(config); err != nil {
 		t.Fatal(err)
 	}
 	if err := sdk.Generate(t.TempDir(), config); err != nil {
 		t.Fatal(err)
 	}
+	unitFound := false
 	for _, file := range config.PackRoot().Packages["debian"].Content {
+		if file.Path == "/usr/local/bin/vpn-agent" {
+			continue
+		}
+		if file.Path != "/etc/systemd/system/vpn-agent.service" && !strings.HasPrefix(file.Path, "/var/lib/vpn-agent/") {
+			t.Errorf("agent config is outside the state directory: %s", file.Path)
+		}
 		if file.Path != "/etc/systemd/system/vpn-agent.service" {
 			continue
 		}
+		unitFound = true
 		if file.Values != "unit" || file.Format != "text" || file.Template != "" {
 			t.Fatalf("systemd unit must use the embedded value: %+v", file)
 		}
-		if config.Unit != systemdUnit {
-			t.Fatal("systemd unit default is not embedded in the pack config")
-		}
-		return
 	}
-	t.Fatal("systemd unit is missing from pack content")
+	if !unitFound {
+		t.Fatal("systemd unit is missing from pack content")
+	}
+	if config.Unit != systemdUnit {
+		t.Fatal("systemd unit default is not embedded in the pack config")
+	}
+	if strings.Contains(config.Unit, "/etc/vpn-agent") {
+		t.Fatal("systemd unit references the old config directory")
+	}
 }
 
 func TestTLSIsZero(t *testing.T) {

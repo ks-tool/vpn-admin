@@ -259,6 +259,7 @@ export interface SSHConfig {
 export interface Agent {
   addr: string;
   tls?: AgentTLS;
+  installed?: boolean;
   /**
    * MonitoringDisabled, when true, turns off the agent's CPU/RAM/network/
    * peer metrics collection (see Service.SetServerMonitoring). Zero value

@@ -99,6 +99,7 @@ export namespace models {
 	export class Agent {
 	    addr: string;
 	    tls?: AgentTLS;
+	    installed?: boolean;
 	    monitoringDisabled?: boolean;
 	    profilingEnabled?: boolean;
 	
@@ -110,6 +111,7 @@ export namespace models {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.addr = source["addr"];
 	        this.tls = this.convertValues(source["tls"], AgentTLS);
+	        this.installed = source["installed"];
 	        this.monitoringDisabled = source["monitoringDisabled"];
 	        this.profilingEnabled = source["profilingEnabled"];
 	    }
@@ -637,6 +639,7 @@ export namespace models {
 	    specSchema: number[];
 	    uiSchema?: number[];
 	    schemaHash: string;
+	    reconcileOrder?: number;
 	    ports?: PortDefinition[];
 	    actions?: ActionDefinition[];
 	
@@ -651,6 +654,7 @@ export namespace models {
 	        this.specSchema = source["specSchema"];
 	        this.uiSchema = source["uiSchema"];
 	        this.schemaHash = source["schemaHash"];
+	        this.reconcileOrder = source["reconcileOrder"];
 	        this.ports = this.convertValues(source["ports"], PortDefinition);
 	        this.actions = this.convertValues(source["actions"], ActionDefinition);
 	    }

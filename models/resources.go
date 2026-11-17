@@ -16,7 +16,11 @@
 
 package models
 
-import agentmodels "github.com/ks-tool/vpn-agent/v2/models"
+import (
+	"encoding/json"
+
+	agentmodels "github.com/ks-tool/vpn-agent/v2/models"
+)
 
 const ProtocolVersion = agentmodels.ProtocolVersion
 const RouteLinkKind = agentmodels.RouteLinkKind
@@ -61,22 +65,28 @@ type LinkRequest = agentmodels.LinkRequest
 type LinkStatus = agentmodels.LinkStatus
 type LinkPhase = agentmodels.LinkPhase
 type LinkOffer = agentmodels.LinkOffer
+
+func ValidateLinkOffer(link Link, offer LinkOffer) error {
+	return agentmodels.ValidateLinkOffer(link, offer)
+}
+
 type RouteDriver = agentmodels.RouteDriver
 
 type ProviderRecord struct {
 	ServerID   string             `json:"serverId"`
 	Definition ProviderDefinition `json:"definition"`
+	Installed  bool               `json:"installed"`
 }
 
-// ResourceSecret temporarily holds v1 material until the provider accepts it.
-// It is stored separately from Resource and is never returned by the API.
+// ResourceSecret holds desired secret material separately from Resource and is never returned by the API.
 type ResourceSecret struct {
-	ResourceID   string   `json:"resourceId"`
-	ServerID     string   `json:"serverId"`
-	PrivateKey   string   `json:"privateKey,omitempty"`
-	PresharedKey string   `json:"presharedKey,omitempty"`
-	PreUp        []string `json:"preUp,omitempty"`
-	PostUp       []string `json:"postUp,omitempty"`
-	PreDown      []string `json:"preDown,omitempty"`
-	PostDown     []string `json:"postDown,omitempty"`
+	ResourceID   string          `json:"resourceId"`
+	ServerID     string          `json:"serverId"`
+	Arguments    json.RawMessage `json:"arguments,omitempty"`
+	PrivateKey   string          `json:"privateKey,omitempty"`
+	PresharedKey string          `json:"presharedKey,omitempty"`
+	PreUp        []string        `json:"preUp,omitempty"`
+	PostUp       []string        `json:"postUp,omitempty"`
+	PreDown      []string        `json:"preDown,omitempty"`
+	PostDown     []string        `json:"postDown,omitempty"`
 }

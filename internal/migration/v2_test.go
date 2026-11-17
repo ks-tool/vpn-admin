@@ -501,7 +501,7 @@ func TestV2SkipsUserPeerMissingFromInterfaceWithWarning(t *testing.T) {
 	assertCleanBuckets(t, destination)
 }
 
-func TestV2MigratesTunnelPeerPSK(t *testing.T) {
+func TestV2MigratesTunnelPeerWithStableResourceNameAndPSK(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "v1.db")
 	destination := filepath.Join(root, "v2.db")
@@ -560,6 +560,9 @@ func TestV2MigratesTunnelPeerPSK(t *testing.T) {
 		}
 		if spec["publicKey"] != keyString(remoteKey) {
 			continue
+		}
+		if resource.Name != "tunnel-"+data.ifaceA.String() || spec["name"] != "Tunnel peer" {
+			t.Fatalf("tunnel peer identity was not preserved: resource=%q spec=%+v", resource.Name, spec)
 		}
 		secret, err := db.Secrets().Get(resource.ID)
 		if err != nil || secret.PresharedKey != presharedKey.String() {

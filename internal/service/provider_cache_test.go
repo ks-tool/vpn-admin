@@ -69,9 +69,25 @@ func TestRemoveCachedProviderSurvivesRestartWithoutAgent(t *testing.T) {
 	if err := svc.removeCachedProvider(serverID, "awg"); err != nil {
 		t.Fatalf("repeated removal must be idempotent: %v", err)
 	}
+	if err := svc.cacheServerProviderManifest(serverID.String(), &models.Manifest{}); err != nil {
+		t.Fatal(err)
+	}
 	restarted := New(svc.store)
-	if _, err := restarted.cachedProviderManifest(serverID.String()); !os.IsNotExist(err) {
-		t.Fatalf("removed provider returned after restart without an agent: %v", err)
+	cached, err := restarted.cachedProviderManifest(serverID.String())
+	if err != nil || len(cached.Providers) != 0 {
+		t.Fatalf("removed provider returned after restart without an agent: %+v, %v", cached, err)
+	}
+	record, err := svc.store.Providers().Get(serverID, "awg")
+	if err != nil || record.Installed {
+		t.Fatalf("provider removal was not persisted: %+v, %v", record, err)
+	}
+	if err := svc.cacheServerProviderManifest(serverID.String(), manifest); err != nil {
+		t.Fatal(err)
+	}
+	cached, err = svc.cachedProviderManifest(serverID.String())
+	record, recordErr := svc.store.Providers().Get(serverID, "awg")
+	if err != nil || recordErr != nil || len(cached.Providers) != 1 || !record.Installed {
+		t.Fatalf("installed provider was not restored from a live manifest: %+v, %v", cached, err)
 	}
 }
 

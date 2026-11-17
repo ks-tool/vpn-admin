@@ -55,8 +55,9 @@ type SSHConfig struct {
 }
 
 type Agent struct {
-	Address string    `json:"addr"`
-	TLS     *AgentTLS `json:"tls,omitempty"`
+	Address   string    `json:"addr"`
+	TLS       *AgentTLS `json:"tls,omitempty"`
+	Installed bool      `json:"installed,omitempty"`
 
 	// MonitoringDisabled, when true, turns off the agent's CPU/RAM/network/
 	// peer metrics collection (see Service.SetServerMonitoring). Zero value

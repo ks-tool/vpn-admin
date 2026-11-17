@@ -65,16 +65,30 @@ type Service struct {
 	providerRefresh  sync.WaitGroup
 	geocoder         locationGeocoder
 	topologyMu       sync.Mutex
+	resourceSyncMu   sync.Mutex
+	resourceSyncLock map[string]*sync.Mutex
 	deployStatus     *deployStatusStore
 	version          string
 }
 
 func New(s storage.Storage, opts ...Option) *Service {
-	svc := &Service{store: s, tunnels: sshclient.NewManager(), providerRegistry: newProviderRegistry(), geocoder: defaultLocationGeocoder(), deployStatus: newDeployStatusStore(), version: "dev"}
+	svc := &Service{store: s, tunnels: sshclient.NewManager(), providerRegistry: newProviderRegistry(), geocoder: defaultLocationGeocoder(), deployStatus: newDeployStatusStore(), resourceSyncLock: make(map[string]*sync.Mutex), version: "dev"}
 	for _, opt := range opts {
 		opt(svc)
 	}
 	return svc
+}
+
+func (s *Service) lockResourceSync(serverID string) func() {
+	s.resourceSyncMu.Lock()
+	lock := s.resourceSyncLock[serverID]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		s.resourceSyncLock[serverID] = lock
+	}
+	s.resourceSyncMu.Unlock()
+	lock.Lock()
+	return lock.Unlock
 }
 
 // AppVersion returns the admin app's build version. Wails-bound (via App

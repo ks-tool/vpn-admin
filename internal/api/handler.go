@@ -21,6 +21,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/ks-tool/vpn-admin/internal/agentclient"
 	"github.com/ks-tool/vpn-admin/internal/service"
 	"github.com/ks-tool/vpn-admin/storage"
 
@@ -203,7 +204,10 @@ func pubKey(r bunrouter.Request) (string, error) {
 func handleErr(err error, fields map[string]any) error {
 	var status int
 	var validationErr *service.ValidationError
+	var agentErr *agentclient.HTTPError
 	switch {
+	case errors.As(err, &agentErr) && agentErr.StatusCode == http.StatusConflict:
+		status = http.StatusConflict
 	case storage.IsNotFound(err):
 		status = http.StatusNotFound
 	case storage.IsAlreadyExists(err):

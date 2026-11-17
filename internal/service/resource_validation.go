@@ -19,8 +19,6 @@ package service
 import (
 	"encoding/json"
 	"uuid"
-
-	"github.com/ks-tool/vpn-admin/models"
 )
 
 func (s *Service) applyPeerUserState(kind string, spec json.RawMessage) (json.RawMessage, error) {
@@ -48,26 +46,4 @@ func (s *Service) applyPeerUserState(kind string, spec json.RawMessage) (json.Ra
 	}
 	values["disabled"] = true
 	return json.Marshal(values)
-}
-
-func validateInterfaceIdentity(existing models.Resource, spec json.RawMessage) error {
-	if existing.Kind != "Interface" {
-		return nil
-	}
-	var desired map[string]any
-	if err := json.Unmarshal(spec, &desired); err != nil {
-		return err
-	}
-	var current map[string]any
-	if err := json.Unmarshal(existing.Spec, &current); err != nil {
-		return err
-	}
-	for _, field := range []string{"iface", "name"} {
-		oldValue, oldOK := current[field].(string)
-		newValue, newOK := desired[field].(string)
-		if oldOK && newOK && oldValue != newValue {
-			return invalidInput("changing interface %q is not supported; create a new resource instead", field)
-		}
-	}
-	return nil
 }
