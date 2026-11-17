@@ -500,3 +500,72 @@ func TestV2SkipsUserPeerMissingFromInterfaceWithWarning(t *testing.T) {
 	}
 	assertCleanBuckets(t, destination)
 }
+
+func TestV2MigratesTunnelPeerPSK(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "v1.db")
+	destination := filepath.Join(root, "v2.db")
+	data := createFixture(t, source, false)
+	presharedKey := mustKey(t)
+	raw, err := bolt.Open(source, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var remoteKey awgmodels.Key
+	if err := raw.Update(func(tx *bolt.Tx) error {
+		var remote map[string]any
+		if err := json.Unmarshal(tx.Bucket([]byte("interfaces")).Get(binaryID(data.ifaceB)), &remote); err != nil {
+			return err
+		}
+		privateKey, err := awgmodels.ParseKey(remote["pk"].(string))
+		if err != nil {
+			return err
+		}
+		remoteKey = privateKey.PublicKey()
+		var iface map[string]any
+		if err := json.Unmarshal(tx.Bucket([]byte("interfaces")).Get(binaryID(data.ifaceA)), &iface); err != nil {
+			return err
+		}
+		iface["peers"] = append(iface["peers"].([]any), map[string]any{"key": keyString(remoteKey), "ips": []string{"0.0.0.0/0"}, "psk": presharedKey.String()})
+		encoded, err := json.Marshal(iface)
+		if err != nil {
+			return err
+		}
+		return tx.Bucket([]byte("interfaces")).Put(binaryID(data.ifaceA), encoded)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := migration.V2(source, destination, false); err != nil {
+		t.Fatal(err)
+	}
+	db, err := boltdb.Open(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	resources, err := db.Resources(data.serverA).List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, resource := range resources {
+		if resource.Kind != "Peer" {
+			continue
+		}
+		var spec map[string]any
+		if err := json.Unmarshal(resource.Spec, &spec); err != nil {
+			t.Fatal(err)
+		}
+		if spec["publicKey"] != keyString(remoteKey) {
+			continue
+		}
+		secret, err := db.Secrets().Get(resource.ID)
+		if err != nil || secret.PresharedKey != presharedKey.String() {
+			t.Fatalf("tunnel peer PSK was not preserved: %+v, %v", secret, err)
+		}
+		return
+	}
+	t.Fatal("tunnel peer resource was not migrated")
+}

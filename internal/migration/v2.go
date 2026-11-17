@@ -413,14 +413,10 @@ func migrateEmbeddedPeers(source, target *bolt.Tx, data inventory) error {
 	}); err != nil {
 		return err
 	}
-	interfaceKeys := make(map[string]bool)
-	for _, iface := range data.interfaces {
-		interfaceKeys[keyString(iface.PrivateKey.PublicKey())] = true
-	}
 	for _, iface := range data.interfaces {
 		for _, peer := range iface.Peers {
 			key := iface.ID.String() + ":" + peer.Key.String()
-			if owned[key] || interfaceKeys[peer.Key.String()] {
+			if owned[key] {
 				continue
 			}
 			id := models.NewDeterministicUUID("embedded:" + key)
