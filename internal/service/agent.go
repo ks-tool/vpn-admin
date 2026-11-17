@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -252,6 +253,16 @@ func (s *Service) serverAndInterface(serverID, interfaceID string) (*models.Serv
 	return srv, iface, err
 }
 
+func interfaceDeviceName(resource *models.Resource) string {
+	var spec struct {
+		Interface string `json:"iface"`
+	}
+	if json.Unmarshal(resource.Spec, &spec) == nil && len(spec.Interface) > 0 {
+		return spec.Interface
+	}
+	return resource.Name
+}
+
 func (s *Service) GetServerInterfaceMetrics(serverID, interfaceID string) (*awgmodels.InterfaceSnapshot, error) {
 	srv, iface, err := s.serverAndInterface(serverID, interfaceID)
 	if err != nil {
@@ -260,7 +271,7 @@ func (s *Service) GetServerInterfaceMetrics(serverID, interfaceID string) (*awgm
 	var snap *awgmodels.InterfaceSnapshot
 	err = s.callAgent(srv, func(ctx context.Context, c *agentclient.Client) error {
 		var mErr error
-		snap, mErr = c.InterfaceMetrics(ctx, iface.Name)
+		snap, mErr = c.InterfaceMetrics(ctx, interfaceDeviceName(iface))
 		return mErr
 	})
 	return snap, err
@@ -274,7 +285,7 @@ func (s *Service) GetServerInterfaceMetricsHistory(serverID, interfaceID string)
 	var history *awgmodels.InterfaceHistory
 	err = s.callAgent(srv, func(ctx context.Context, c *agentclient.Client) error {
 		var mErr error
-		history, mErr = c.InterfaceMetricsHistory(ctx, iface.Name)
+		history, mErr = c.InterfaceMetricsHistory(ctx, interfaceDeviceName(iface))
 		return mErr
 	})
 	return history, err

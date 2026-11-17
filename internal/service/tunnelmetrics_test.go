@@ -30,7 +30,7 @@ func TestGetTunnelMetricsMatchesDestinationPublicKey(t *testing.T) {
 	svc := newTestService(t)
 	sourceServer, sourceAgent := newLinkTestServer(t, svc, "a")
 	targetServer, _ := newLinkTestServer(t, svc, "b")
-	source := models.Resource{ID: uuid.New().String(), ServerID: sourceServer.ID.String(), APIVersion: "test/v1", Kind: "Interface", Name: "awg0", Spec: []byte(`{}`)}
+	source := models.Resource{ID: uuid.New().String(), ServerID: sourceServer.ID.String(), APIVersion: "test/v1", Kind: "Interface", Name: "office", Spec: []byte(`{"iface":"awg0"}`)}
 	targetKey, err := awgmodels.GeneratePrivateKey()
 	if err != nil {
 		t.Fatal(err)
@@ -48,7 +48,7 @@ func TestGetTunnelMetricsMatchesDestinationPublicKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	p95 := 87.5
-	sourceAgent.metrics[source.Name] = awgmodels.InterfaceSnapshot{Interface: source.Name, Peers: []awgmodels.PeerSnapshot{{PublicKey: hex.EncodeToString(targetPublicKey[:]), LatencyP95Ms: &p95}}}
+	sourceAgent.metrics["awg0"] = awgmodels.InterfaceSnapshot{Interface: "awg0", Peers: []awgmodels.PeerSnapshot{{PublicKey: hex.EncodeToString(targetPublicKey[:]), LatencyP95Ms: &p95}}}
 	metrics, err := svc.GetTunnelMetrics()
 	if err != nil {
 		t.Fatal(err)
