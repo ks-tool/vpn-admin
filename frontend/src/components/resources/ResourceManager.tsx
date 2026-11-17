@@ -51,6 +51,7 @@ interface EditorState {
 export interface ActionState {
     item: ListedResource;
     action: ActionDefinition;
+    initialArguments?: Record<string, unknown>;
 }
 
 interface ResourceManagerProps {
@@ -210,7 +211,7 @@ export function ResourceManager({serverId, kind = 'Interface', userId, onChanged
                                             {resourceDisplayName(item.resource)}
                                             <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-normal text-muted-foreground">{item.provider}/{item.resource.kind}</span>
                                         </div>
-                                        <div className="mt-1 text-xs text-muted-foreground">{item.resource.status.phase} · {t('resources.generation')} {item.resource.status.observedGeneration}/{item.resource.generation}</div>
+                                        <div className="mt-1 text-xs text-muted-foreground">{item.resource.status.phase}</div>
                                         {condition?.message && <div className={cn('mt-2 text-xs', condition.status === 'False' ? 'text-red-500' : 'text-muted-foreground')}>{condition.reason}: {condition.message}</div>}
                                     </div>
                                     <div className="flex shrink-0 gap-2">
@@ -260,7 +261,7 @@ function supportsDisabled(definition: ResourceDefinition): boolean {
 
 export function ResourceAction({state, busy, onClose, onExecute}: {state: ActionState; busy: boolean; onClose: () => void; onExecute: (state: ActionState, args: Record<string, unknown>) => Promise<ActionResult>}) {
     const {t} = useTranslation();
-    const [formData, setFormData] = useState<Record<string, unknown>>({});
+    const [formData, setFormData] = useState<Record<string, unknown>>(state.initialArguments ?? {});
     const [result, setResult] = useState<ActionResult | null>(null);
     const [error, setError] = useState<string | null>(null);
     const schema = state.action.argumentsSchema ?? {type: 'object', properties: {}};

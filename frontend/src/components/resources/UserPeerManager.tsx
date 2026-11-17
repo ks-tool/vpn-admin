@@ -55,6 +55,14 @@ function peerName(peer: ProviderResource): string {
     return typeof peer.spec.name === 'string' && peer.spec.name.length > 0 ? peer.spec.name : peer.name;
 }
 
+function clientEndpoint(server: Server | undefined, iface: ProviderResource | undefined): string {
+    const host = server?.ssh.host.trim() ?? '';
+    const listen = Number(iface?.spec.listen ?? 0);
+    if (!host || !listen) return '';
+    const unbracketed = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+    return `${unbracketed.includes(':') ? `[${unbracketed}]` : unbracketed}:${listen}`;
+}
+
 export function UserPeerManager({user, servers, resources, onChanged}: UserPeerManagerProps) {
     const {t} = useTranslation();
     const peers = useMemo(() => resources.filter(resource => resource.kind === 'Peer' && resource.spec.userRef === user.id), [resources, user.id]);
@@ -180,7 +188,11 @@ export function UserPeerManager({user, servers, resources, onChanged}: UserPeerM
                                         {detail && actions.map(actionDefinition => (
                                             <button
                                                 key={actionDefinition.name}
-                                                onClick={() => setAction({item: {resource: peer, ...detail}, action: actionDefinition})}
+                                                onClick={() => setAction({
+                                                    item: {resource: peer, ...detail},
+                                                    action: actionDefinition,
+                                                    initialArguments: actionDefinition.name === 'renderClientConfig' ? {endpoint: clientEndpoint(server, iface)} : undefined,
+                                                })}
                                                 disabled={busy}
                                                 className="rounded p-1 text-muted-foreground transition-colors hover:text-foreground dark:text-zinc-500 dark:hover:text-zinc-300"
                                                 title={actionDefinition.title}
