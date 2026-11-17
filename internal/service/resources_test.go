@@ -287,3 +287,24 @@ func TestRenderProviderClientConfigIncludesTextAndQRCode(t *testing.T) {
 		t.Fatalf("action calls=%d, arguments=%s", agent.actionCalls, agent.actionArguments)
 	}
 }
+
+func TestWaitForServerProvidersBeforeSync(t *testing.T) {
+	svc, server, agent := newTestServerWithAgent(t)
+	item := models.Resource{ID: uuid.New().String(), ServerID: server.ID.String(), APIVersion: "awg.ks-tool.dev/v1", Kind: "Interface", Name: "awg0", Spec: json.RawMessage(`{"iface":"awg0"}`)}
+	if err := svc.saveProviderResource(server.ID.String(), item); err != nil {
+		t.Fatal(err)
+	}
+	agent.awg = false
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		agent.mu.Lock()
+		agent.awg = true
+		agent.mu.Unlock()
+	}()
+	if err := svc.waitForServerProviders(server.ID.String(), time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SyncServer(server.ID.String()); err != nil {
+		t.Fatalf("sync after provider registration: %v", err)
+	}
+}

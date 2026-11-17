@@ -71,6 +71,9 @@ func (s *Service) DeployAgentPack(id string, deployment models.AgentDeployment) 
 		err := deploy.ToPack(context.Background(), *srv, deployment, s.tunnels.PassphraseFor(sID), s.tunnels.SudoPasswordFor(sID), func(step string) {
 			s.deployStatus.setStep(sID, step)
 		})
+		if err == nil {
+			err = s.waitForServerProviders(id, 20*time.Second)
+		}
 		s.deployStatus.finish(sID, err)
 		if err != nil {
 			return

@@ -203,6 +203,32 @@ func (s *Service) refreshProviderManifest(serverID string) {
 	_, _ = s.RefreshProviderManifest(serverID)
 }
 
+func (s *Service) waitForServerProviders(serverID string, timeout time.Duration) error {
+	id, err := uuid.Parse(serverID)
+	if err != nil {
+		return err
+	}
+	resources, err := s.store.Resources(id).List()
+	if err != nil {
+		return err
+	}
+	names := make(map[string]struct{})
+	for _, resource := range resources {
+		names[providerFromAPIVersion(resource.APIVersion)] = struct{}{}
+	}
+	ordered := make([]string, 0, len(names))
+	for name := range names {
+		ordered = append(ordered, name)
+	}
+	sort.Strings(ordered)
+	for _, name := range ordered {
+		if err := s.waitForProvider(serverID, name, timeout); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Service) waitForProvider(serverID, name string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
