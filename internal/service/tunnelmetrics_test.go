@@ -56,4 +56,11 @@ func TestGetTunnelMetricsMatchesDestinationPublicKey(t *testing.T) {
 	if len(metrics) != 1 || metrics[0].ConnectionID != "link:"+connection.ID || metrics[0].LatencyP95Ms == nil || *metrics[0].LatencyP95Ms != p95 {
 		t.Fatalf("unexpected tunnel metrics: %+v", metrics)
 	}
+	history, err := svc.GetServerInterfaceMetricsHistory(sourceServer.ID.String(), source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history.Peers) != 1 || history.Peers[0].PublicKey != hex.EncodeToString(targetPublicKey[:]) || len(history.Peers[0].Points) != 1 {
+		t.Fatalf("unexpected peer history: %+v", history)
+	}
 }

@@ -57,15 +57,27 @@ func newFakeAgentTLS(t *testing.T) (*httptest.Server, *models.AgentTLS, *fakeAge
 	t.Helper()
 	fa := &fakeAgentTLS{metrics: make(map[string]awgmodels.InterfaceSnapshot), resources: make(map[string]models.Resource), info: agentmodels.HostInfo{Backend: "kernel", Version: "test"}}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /metrics/{name}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /v1/providers/awg/bridge/metrics", func(w http.ResponseWriter, r *http.Request) {
 		fa.mu.Lock()
-		snapshot, ok := fa.metrics[r.PathValue("name")]
-		fa.mu.Unlock()
-		if !ok {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
+		snapshot := awgmodels.MetricsSnapshot{Interfaces: make([]awgmodels.InterfaceSnapshot, 0, len(fa.metrics))}
+		for _, item := range fa.metrics {
+			snapshot.Interfaces = append(snapshot.Interfaces, item)
 		}
+		fa.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(snapshot)
+	})
+	mux.HandleFunc("GET /v1/providers/awg/bridge/metrics/history", func(w http.ResponseWriter, r *http.Request) {
+		fa.mu.Lock()
+		history := awgmodels.SystemHistory{Interfaces: make([]awgmodels.InterfaceHistory, 0, len(fa.metrics))}
+		for name, item := range fa.metrics {
+			iface := awgmodels.InterfaceHistory{Interface: name}
+			for _, peer := range item.Peers {
+				iface.Peers = append(iface.Peers, awgmodels.PeerHistory{PublicKey: peer.PublicKey, Points: []awgmodels.PeerHistoryPoint{{RxBytes: peer.RxBytes, TxBytes: peer.TxBytes, LastHandshake: peer.LastHandshake}}})
+			}
+			history.Interfaces = append(history.Interfaces, iface)
+		}
+		fa.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(history)
 	})
 	mux.HandleFunc("GET /info", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(fa.info)

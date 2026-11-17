@@ -28,7 +28,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 
 	awgmodels "github.com/ks-tool/vpn-agent/v2/providers/awg/models"
@@ -36,9 +35,7 @@ import (
 	agentmodels "github.com/ks-tool/vpn-agent/v2/models"
 )
 
-// NotFoundError is returned by Get/Delete when the agent has no interface
-// with the given name (agent storage.NotFound, mapped to HTTP 404 by the
-// agent's handlers).
+// NotFoundError reports that the AWG provider has no metrics for the interface.
 type NotFoundError struct {
 	Interface string
 }
@@ -112,20 +109,30 @@ func (c *Client) Metrics(ctx context.Context) (*agentmodels.SystemSnapshot, erro
 
 // InterfaceMetrics fetches one interface's peer metrics and agent-measured p95 latency.
 func (c *Client) InterfaceMetrics(ctx context.Context, name string) (*awgmodels.InterfaceSnapshot, error) {
-	var snap awgmodels.InterfaceSnapshot
-	if err := c.interfaceMetricsGet(ctx, "/metrics/"+url.PathEscape(name), &snap); err != nil {
+	var snapshot awgmodels.MetricsSnapshot
+	if err := c.interfaceMetricsGet(ctx, "/v1/providers/awg/bridge/metrics", &snapshot); err != nil {
 		return nil, err
 	}
-	return &snap, nil
+	for index := range snapshot.Interfaces {
+		if snapshot.Interfaces[index].Interface == name {
+			return &snapshot.Interfaces[index], nil
+		}
+	}
+	return nil, &NotFoundError{Interface: name}
 }
 
 // InterfaceMetricsHistory fetches one interface's retained peer history.
 func (c *Client) InterfaceMetricsHistory(ctx context.Context, name string) (*awgmodels.InterfaceHistory, error) {
-	var history awgmodels.InterfaceHistory
-	if err := c.interfaceMetricsGet(ctx, "/metrics/"+url.PathEscape(name)+"/history", &history); err != nil {
+	var history awgmodels.SystemHistory
+	if err := c.interfaceMetricsGet(ctx, "/v1/providers/awg/bridge/metrics/history", &history); err != nil {
 		return nil, err
 	}
-	return &history, nil
+	for index := range history.Interfaces {
+		if history.Interfaces[index].Interface == name {
+			return &history.Interfaces[index], nil
+		}
+	}
+	return nil, &NotFoundError{Interface: name}
 }
 
 func (c *Client) interfaceMetricsGet(ctx context.Context, path string, output any) error {
