@@ -17,13 +17,13 @@
 import {useEffect, useState} from 'react';
 import {useTranslation} from 'react-i18next';
 import {toast} from 'sonner';
-import {ArrowLeft, Key, Trash2, UserPen} from 'lucide-react';
+import {ArrowLeft, Trash2, UserPen} from 'lucide-react';
 import {useNavigation} from '@/contexts/NavigationContext';
 import {useAppStore} from '@/store';
 import {StatusBadge} from '@/components/common/StatusBadge';
 import {Container} from '@/components/common/Container';
 import {FormField} from '@/components/common/FormField';
-import {ResourceManager} from '@/components/resources/ResourceManager';
+import {UserPeerManager} from '@/components/resources/UserPeerManager';
 import {buttons, inputs} from '@/components/common/controls';
 import {ConfirmModal} from '@/components/common/ConfirmModal';
 import {cn} from '@/lib/utils';
@@ -31,27 +31,19 @@ import {cn} from '@/lib/utils';
 export default function UserDetail() {
     const {t} = useTranslation();
     const {navigate} = useNavigation();
-    const {users, servers, resources, selectedUserId, setSelectedUser, updateUser, deleteUser, refreshData, getInterfaceName} = useAppStore();
+    const {users, servers, resources, selectedUserId, setSelectedUser, updateUser, deleteUser, refreshData} = useAppStore();
     const [isEditing, setIsEditing] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [showDeleteUserConfirm, setShowDeleteUserConfirm] = useState(false);
     const [deleteUserLoading, setDeleteUserLoading] = useState(false);
-    const [peerServerId, setPeerServerId] = useState('');
     const [formData, setFormData] = useState({name: '', description: '', disabled: false});
     const user = users.find(item => item.id === selectedUserId);
-    const peers = resources.filter(resource => resource.kind === 'Peer' && resource.spec.userRef === selectedUserId);
 
     useEffect(() => {
         if (!user) return;
         const timeout = window.setTimeout(() => setFormData({name: user.name || '', description: user.description || '', disabled: user.disabled || false}), 0);
         return () => window.clearTimeout(timeout);
     }, [user]);
-
-    useEffect(() => {
-        if (peerServerId || servers.length === 0) return;
-        const timeout = window.setTimeout(() => setPeerServerId(peers[0]?.serverId ?? servers[0].id), 0);
-        return () => window.clearTimeout(timeout);
-    }, [peerServerId, peers, servers]);
 
     if (!user) return <div className="p-8 text-center text-muted-foreground">{t('users.noUser')}</div>;
 
@@ -119,31 +111,7 @@ export default function UserDetail() {
                         <div className="flex items-center gap-4 text-sm"><span className="flex-1 font-semibold">{user.description || '—'}</span><StatusBadge status={user.disabled ? 'disabled' : 'enabled'} size="sm" /></div>
                     )}
                 </Container>
-                <Container title={<span className="flex items-center gap-2 text-lg font-semibold"><Key size={20} />{t('users.peers')} ({peers.length})</span>}>
-                    {peers.length === 0 ? <div className="py-4 text-center text-muted-foreground">{t('users.noPeers')}</div> : (
-                        <div className="mb-5 space-y-2">
-                            {peers.map(peer => {
-                                const server = servers.find(item => item.id === peer.serverId);
-                                return (
-                                    <div key={peer.id} className="flex items-center justify-between gap-4 rounded-lg border border-border p-3 text-sm">
-                                        <div className="min-w-0"><div className="truncate font-medium">{String(peer.spec.name ?? peer.name)}</div><div className="truncate text-xs text-muted-foreground">{server?.name ?? peer.serverId}/{getInterfaceName(String(peer.spec.interfaceRef ?? '')) ?? String(peer.spec.interfaceRef ?? '')}</div></div>
-                                        <StatusBadge status={peer.spec.disabled === true ? 'disabled' : 'enabled'} size="sm" />
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    )}
-                    {servers.length > 0 && (
-                        <div className="border-t border-border pt-4">
-                            <FormField label={t('peers.server')}>
-                                <select value={peerServerId} onChange={event => setPeerServerId(event.target.value)} className={inputs.primary}>
-                                    {servers.map(server => <option key={server.id} value={server.id}>{server.name}</option>)}
-                                </select>
-                            </FormField>
-                            {peerServerId && <div className="mt-4"><ResourceManager serverId={peerServerId} kind="Peer" userId={user.id} onChanged={() => void refreshData()} /></div>}
-                        </div>
-                    )}
-                </Container>
+                <UserPeerManager user={user} servers={servers} resources={resources} onChanged={refreshData} />
             </div>
             {showDeleteUserConfirm && <ConfirmModal title={t('users.deleteUser')} message={t('users.confirmDeleteUser')} onConfirm={() => void handleDeleteUser()} onCancel={() => setShowDeleteUserConfirm(false)} loading={deleteUserLoading} />}
         </div>

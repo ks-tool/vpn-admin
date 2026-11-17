@@ -36,7 +36,7 @@ import {
 import {cn} from '@/lib/utils';
 import type {ActionDefinition, ActionResult, ProviderDefinition, ProviderManifest, ProviderResource, ResourceDefinition} from '@/types';
 
-interface ListedResource {
+export interface ListedResource {
     provider: string;
     definition: ResourceDefinition;
     resource: ProviderResource;
@@ -48,7 +48,7 @@ interface EditorState {
     resource?: ProviderResource;
 }
 
-interface ActionState {
+export interface ActionState {
     item: ListedResource;
     action: ActionDefinition;
 }
@@ -258,7 +258,7 @@ function supportsDisabled(definition: ResourceDefinition): boolean {
     return properties?.disabled?.type === 'boolean';
 }
 
-function ResourceAction({state, busy, onClose, onExecute}: {state: ActionState; busy: boolean; onClose: () => void; onExecute: (state: ActionState, args: Record<string, unknown>) => Promise<ActionResult>}) {
+export function ResourceAction({state, busy, onClose, onExecute}: {state: ActionState; busy: boolean; onClose: () => void; onExecute: (state: ActionState, args: Record<string, unknown>) => Promise<ActionResult>}) {
     const {t} = useTranslation();
     const [formData, setFormData] = useState<Record<string, unknown>>({});
     const [result, setResult] = useState<ActionResult | null>(null);
