@@ -369,7 +369,7 @@ func migrateUserPeer(user v1User, peer v1Peer, iface v1Interface, server models.
 		values["dns"] = peer.DNS
 	}
 	resource, secret, err := newPeerResource(id, server, values, peer.PrivateKey.String(), configured.PresharedKey)
-	resource.Name = user.Name + "-" + peer.Name + "-" + id.String()[:8]
+	resource.Name = peer.Name
 	return resource, secret, err
 }
 

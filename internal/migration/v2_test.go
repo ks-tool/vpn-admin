@@ -97,6 +97,9 @@ func TestV2MigratesCompleteInventoryWithoutLegacyBuckets(t *testing.T) {
 	if peerResource == nil {
 		t.Fatal("user peer resource was not migrated")
 	}
+	if peerResource.Name != "laptop" {
+		t.Fatalf("peer name changed during migration: %q", peerResource.Name)
+	}
 	var peerSpec map[string]any
 	if err := json.Unmarshal(peerResource.Spec, &peerSpec); err != nil {
 		t.Fatal(err)
