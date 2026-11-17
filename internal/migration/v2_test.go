@@ -447,7 +447,7 @@ func TestV2EmbeddedPeerWithoutPSKHasNoPendingSecret(t *testing.T) {
 	t.Fatal("embedded peer without PSK was not migrated")
 }
 
-func TestV2RecoversUserPeerMissingFromInterface(t *testing.T) {
+func TestV2RejectsUserPeerMissingFromInterface(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "v1.db")
 	destination := filepath.Join(root, "v2.db")
@@ -461,6 +461,7 @@ func TestV2RecoversUserPeerMissingFromInterface(t *testing.T) {
 		if err := json.Unmarshal(tx.Bucket([]byte("interfaces")).Get(binaryID(data.ifaceA)), &iface); err != nil {
 			return err
 		}
+		iface["addr"] = "10.0.0.10/24"
 		iface["peers"] = []any{}
 		encoded, err := json.Marshal(iface)
 		if err != nil {
@@ -473,40 +474,10 @@ func TestV2RecoversUserPeerMissingFromInterface(t *testing.T) {
 	if err := raw.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := migration.V2(source, destination, false); err != nil {
-		t.Fatalf("orphaned user peer blocked migration: %v", err)
+	if err := migration.V2(source, destination, false); err == nil || !strings.Contains(err.Error(), "is missing from interface") {
+		t.Fatalf("inconsistent v1 peer error = %v", err)
 	}
-	db, err := boltdb.Open(destination)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(destination); !os.IsNotExist(err) {
+		t.Fatalf("migration with an allocated peer address produced a destination: %v", err)
 	}
-	defer func() { _ = db.Close() }()
-	resources, err := db.Resources(data.serverA).List()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, resource := range resources {
-		if resource.Kind != "Peer" {
-			continue
-		}
-		var spec struct {
-			UserRef    string   `json:"userRef"`
-			AllowedIPs []string `json:"allowedIPs"`
-		}
-		if err := json.Unmarshal(resource.Spec, &spec); err != nil {
-			t.Fatal(err)
-		}
-		if spec.UserRef != data.user.String() {
-			continue
-		}
-		if len(spec.AllowedIPs) != 1 || spec.AllowedIPs[0] != "10.0.0.2/32" {
-			t.Fatalf("peer address was not recovered: %+v", spec)
-		}
-		secret, err := db.Secrets().Get(resource.ID)
-		if err != nil || secret.PrivateKey != data.peerKey.String() {
-			t.Fatalf("peer key was not preserved: %+v, %v", secret, err)
-		}
-		return
-	}
-	t.Fatal("user peer was not migrated")
 }

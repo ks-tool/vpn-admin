@@ -207,7 +207,7 @@ export function ResourceManager({serverId, kind = 'Interface', userId, onChanged
                                     <div className="min-w-0">
                                         <div className="flex flex-wrap items-center gap-2 text-sm font-semibold">
                                             <span className={cn('h-2 w-2 rounded-full', item.resource.status.phase === 'Ready' ? 'bg-emerald-500' : item.resource.status.phase === 'Degraded' ? 'bg-red-500' : 'bg-amber-500')} />
-                                            {item.resource.name}
+                                            {resourceDisplayName(item.resource)}
                                             <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-normal text-muted-foreground">{item.provider}/{item.resource.kind}</span>
                                         </div>
                                         <div className="mt-1 text-xs text-muted-foreground">{item.resource.status.phase} · {t('resources.generation')} {item.resource.status.observedGeneration}/{item.resource.generation}</div>
@@ -227,7 +227,7 @@ export function ResourceManager({serverId, kind = 'Interface', userId, onChanged
             )}
             {editor && (!editor.provider || schemas[editor.provider]) && <ResourceEditor key={`${editor.provider}:${editor.kind}:${editor.resource?.id ?? 'new'}`} state={editor} manifest={manifest} schemas={schemas} userId={userId} busy={busy} onStateChange={setEditor} onClose={() => setEditor(null)} onSave={(name, spec) => void save(editor, name, spec)} />}
             {action && <ResourceAction state={action} busy={busy} onClose={() => setAction(null)} onExecute={executeAction} />}
-            {deleting && <ConfirmModal title={t('resources.deleteTitle')} message={t('resources.deleteConfirm', {name: deleting.resource.name})} onCancel={() => setDeleting(null)} onConfirm={() => void remove()} loading={busy} />}
+            {deleting && <ConfirmModal title={t('resources.deleteTitle')} message={t('resources.deleteConfirm', {name: resourceDisplayName(deleting.resource)})} onCancel={() => setDeleting(null)} onConfirm={() => void remove()} loading={busy} />}
         </div>
     );
 }
@@ -247,6 +247,10 @@ function ActionIcon({name}: {name: string}) {
         default:
             return <Play size={15} />;
     }
+}
+
+function resourceDisplayName(resource: ProviderResource): string {
+    return typeof resource.spec.name === 'string' && resource.spec.name.length > 0 ? resource.spec.name : resource.name;
 }
 
 function supportsDisabled(definition: ResourceDefinition): boolean {
@@ -271,7 +275,7 @@ function ResourceAction({state, busy, onClose, onExecute}: {state: ActionState; 
     const resultText = result?.type === 'file' && typeof result.data === 'string' ? result.data : result ? JSON.stringify(result.data ?? {taskId: result.taskId}, null, 2) : '';
     return (
         <Modal title={state.action.title} onClose={onClose} loading={busy} size="lg">
-            <div className="mb-3 text-sm text-muted-foreground">{state.item.resource.name} · {state.item.provider}/{state.item.resource.kind}</div>
+            <div className="mb-3 text-sm text-muted-foreground">{resourceDisplayName(state.item.resource)} · {state.item.provider}/{state.item.resource.kind}</div>
             {state.action.description && <p className="mb-4 text-sm text-muted-foreground">{state.action.description}</p>}
             {state.action.requiresConfirmation && !result && <p className="mb-4 rounded-lg bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-300">{t('resources.actionConfirm')}</p>}
             {error && <p className="mb-4 rounded-lg bg-red-500/10 p-3 text-sm text-red-600 dark:text-red-400">{error}</p>}

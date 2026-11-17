@@ -22,7 +22,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -268,11 +267,10 @@ func migrateSnapshot(source, target *bolt.Tx) error {
 			if !ok {
 				return fmt.Errorf("user %s peer %q references missing interface %s", old.ID, peer.Name, peer.InterfaceID)
 			}
-			resource, secret, err := migrateUserPeer(old, peer, &iface, data.owners[iface.ID])
+			resource, secret, err := migrateUserPeer(old, peer, iface, data.owners[iface.ID])
 			if err != nil {
 				return err
 			}
-			data.interfaces[iface.ID] = iface
 			if err := put(target.Bucket(bucketResources), []byte(resource.ID), &resource); err != nil {
 				return err
 			}
@@ -349,7 +347,7 @@ func migrateInterface(server models.Server, iface v1Interface) (models.Resource,
 	return resource, secret, nil
 }
 
-func migrateUserPeer(user v1User, peer v1Peer, iface *v1Interface, server models.Server) (models.Resource, models.ResourceSecret, error) {
+func migrateUserPeer(user v1User, peer v1Peer, iface v1Interface, server models.Server) (models.Resource, models.ResourceSecret, error) {
 	publicKey := keyString(peer.PrivateKey.PublicKey())
 	var configured *awgmodels.InterfacePeer
 	for index := range iface.Peers {
@@ -359,12 +357,7 @@ func migrateUserPeer(user v1User, peer v1Peer, iface *v1Interface, server models
 		}
 	}
 	if configured == nil {
-		recovered, err := recoverInterfacePeer(iface, publicKey)
-		if err != nil {
-			return models.Resource{}, models.ResourceSecret{}, fmt.Errorf("recover user %s peer %q on interface %s: %w", user.ID, peer.Name, iface.ID, err)
-		}
-		iface.Peers = append(iface.Peers, recovered)
-		configured = &iface.Peers[len(iface.Peers)-1]
+		return models.Resource{}, models.ResourceSecret{}, fmt.Errorf("user %s peer %q is missing from interface %s; restore the v1 interface peer instead of allocating a new address", user.ID, peer.Name, iface.ID)
 	}
 	id := models.NewDeterministicUUID(user.ID.String() + ":" + peer.InterfaceID.String() + ":" + publicKey)
 	values := map[string]any{
@@ -378,64 +371,6 @@ func migrateUserPeer(user v1User, peer v1Peer, iface *v1Interface, server models
 	resource, secret, err := newPeerResource(id, server, values, peer.PrivateKey.String(), configured.PresharedKey)
 	resource.Name = user.Name + "-" + peer.Name + "-" + id.String()[:8]
 	return resource, secret, err
-}
-
-func recoverInterfacePeer(iface *v1Interface, publicKey string) (awgmodels.InterfacePeer, error) {
-	key, err := awgmodels.ParseKey(publicKey)
-	if err != nil {
-		return awgmodels.InterfacePeer{}, err
-	}
-	interfaceIP, network, err := net.ParseCIDR(iface.Address)
-	if err != nil {
-		return awgmodels.InterfacePeer{}, fmt.Errorf("interface address %q is invalid: %w", iface.Address, err)
-	}
-	used := map[string]bool{interfaceIP.String(): true}
-	hasDefaultRoute := false
-	for _, peer := range iface.Peers {
-		for _, allowedIP := range peer.AllowedIPs {
-			ip, route, err := net.ParseCIDR(allowedIP)
-			if err != nil {
-				continue
-			}
-			used[ip.String()] = true
-			if ones, _ := route.Mask.Size(); ones == 0 {
-				hasDefaultRoute = true
-			}
-		}
-	}
-	ones, bits := network.Mask.Size()
-	if hasDefaultRoute && bits-ones >= 2 {
-		gateway := cloneMigrationIP(network.IP.Mask(network.Mask))
-		incrementMigrationIP(gateway)
-		used[gateway.String()] = true
-	}
-	broadcast := cloneMigrationIP(network.IP.Mask(network.Mask))
-	for index := range broadcast {
-		broadcast[index] |= ^network.Mask[index]
-	}
-	for ip := cloneMigrationIP(network.IP.Mask(network.Mask)); network.Contains(ip); incrementMigrationIP(ip) {
-		if bits-ones >= 2 && (ip.Equal(network.IP) || ip.Equal(broadcast)) {
-			continue
-		}
-		if used[ip.String()] {
-			continue
-		}
-		return awgmodels.InterfacePeer{Key: key, AllowedIPs: []string{fmt.Sprintf("%s/%d", ip.String(), bits)}, KeepaliveInterval: 10 * time.Second}, nil
-	}
-	return awgmodels.InterfacePeer{}, fmt.Errorf("no free host address in subnet %s", network.String())
-}
-
-func cloneMigrationIP(ip net.IP) net.IP {
-	return append(net.IP(nil), ip...)
-}
-
-func incrementMigrationIP(ip net.IP) {
-	for index := len(ip) - 1; index >= 0; index-- {
-		ip[index]++
-		if ip[index] != 0 {
-			break
-		}
-	}
 }
 
 func migrateEmbeddedPeers(source, target *bolt.Tx, data inventory) error {
