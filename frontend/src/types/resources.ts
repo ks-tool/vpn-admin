@@ -16,6 +16,7 @@ export interface ResourceDefinition {
     specSchema: Record<string, unknown>;
     uiSchema?: Record<string, unknown>;
     schemaHash: string;
+    reconcileOrder?: number;
     ports?: PortDefinition[];
     actions?: ActionDefinition[];
 }
@@ -73,6 +74,13 @@ export interface ActionResult {
     fileName?: string;
     mediaType?: string;
     taskId?: string;
+}
+
+export interface ProviderClientConfig {
+    text: string;
+    qrCode: string;
+    fileName?: string;
+    mediaType?: string;
 }
 
 export interface ProviderLink {

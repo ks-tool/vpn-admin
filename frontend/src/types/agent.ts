@@ -16,14 +16,6 @@
  */
 
 //////////
-// source: agent.go
-
-export interface AgentInfo {
-  mid: number /* uint64 */;
-  devices: DeviceInfo[];
-}
-
-//////////
 // source: deployment.go
 
 /**
@@ -74,14 +66,11 @@ export interface HostInfo {
    */
   inDocker: boolean;
   /**
-   * KernelModule reports whether the AmneziaWG kernel module is available on
-   * the host (modinfo amneziawg succeeds — e.g. installed via dkms). Only
-   * meaningful for the kernel backend; always false for userspace.
+   * KernelModule reports provider-reported kernel module availability.
    */
   kernelModule: boolean;
   /**
-   * InterfaceKinds lists the interface variants this agent can create on this
-   * host: "amneziawg" and/or "wireguard".
+   * InterfaceKinds lists provider-reported interface variants.
    */
   interfaceKinds: string[];
   /**
@@ -98,7 +87,7 @@ export interface HostInfo {
 // source: metrics.go
 
 /**
- * SystemSnapshot is the latest recorded host-level sample.
+ * SystemSnapshot is the latest host-level sample collected by the agent.
  */
 export interface SystemSnapshot {
   timestamp: number /* time.Time */;
@@ -108,49 +97,9 @@ export interface SystemSnapshot {
   load1: number /* float64 */;
   load5: number /* float64 */;
   load15: number /* float64 */;
-  /**
-   * NetRxBytes/NetTxBytes are bytes transferred *during this one
-   * collection interval* (e.g. the last 45s, see VPN_AGENT_METRICS_INTERVAL),
-   * not the host's cumulative since-boot counters from /proc/net/dev.
-   */
   netRxBytes: number /* uint64 */;
   netTxBytes: number /* uint64 */;
 }
-/**
- * PeerSnapshot is the latest recorded sample for one peer of one interface.
- */
-export interface PeerSnapshot {
-  publicKey: string;
-  rx: number /* uint64 */;
-  tx: number /* uint64 */;
-  lastHandshake: number /* time.Time */;
-  probeAddress?: string;
-  /**
-   * LatencyP95Ms is the agent-measured 95th-percentile ICMP round trip over
-   * the last 15 minutes, nil until a probe succeeds.
-   */
-  latencyP95Ms?: number /* float64 */;
-}
-/**
- * InterfaceSnapshot groups peer snapshots under their interface name.
- */
-export interface InterfaceSnapshot {
-  interface: string;
-  peers: PeerSnapshot[];
-}
-/**
- * MetricsSnapshot is the AWG provider's internal metrics response consumed by
- * the agent; the public agent API exposes System and Interfaces separately.
- */
-export interface MetricsSnapshot {
-  system: SystemSnapshot;
-  interfaces: InterfaceSnapshot[];
-}
-/**
- * SystemHistoryPoint is one retained host-level sample, aligned across
- * metrics by timestamp (see Collector.SystemHistory). Like SystemSnapshot,
- * NetRxBytes/NetTxBytes are per-interval deltas, not cumulative counters.
- */
 export interface SystemHistoryPoint {
   timestamp: number /* time.Time */;
   cpuPercent: number /* float64 */;
@@ -159,43 +108,8 @@ export interface SystemHistoryPoint {
   netRxBytes: number /* uint64 */;
   netTxBytes: number /* uint64 */;
 }
-/**
- * SystemHistory is the agent's host-history response. Interfaces is populated
- * only in the AWG provider's internal response and is filtered by the agent;
- * public peer history is served by /metrics/{interface}/history.
- */
 export interface SystemHistory {
   points: SystemHistoryPoint[];
-  interfaces: InterfaceHistory[];
-}
-/**
- * PeerHistoryPoint is one retained sample for a single peer. Unlike
- * SystemHistoryPoint's per-interval network deltas, RxBytes/TxBytes are the
- * cumulative byte counters WireGuard reports for the peer (same as
- * PeerSnapshot); differencing consecutive points yields per-interval traffic.
- * LastHandshake is the peer's last successful handshake at that sample (zero
- * value if it had never completed one yet).
- */
-export interface PeerHistoryPoint {
-  timestamp: number /* time.Time */;
-  rx: number /* uint64 */;
-  tx: number /* uint64 */;
-  lastHandshake: number /* time.Time */;
-}
-/**
- * PeerHistory is every retained sample for one peer, oldest first.
- */
-export interface PeerHistory {
-  publicKey: string;
-  points: PeerHistoryPoint[];
-}
-/**
- * InterfaceHistory groups per-peer history under their interface name, as
- * carried in SystemHistory.Interfaces.
- */
-export interface InterfaceHistory {
-  interface: string;
-  peers: PeerHistory[];
 }
 
 //////////
@@ -209,110 +123,4 @@ export interface RouteDriver {
   socks5?: string;
   tun?: string;
   routeId?: string;
-}
-
-//////////
-// source: wg.go
-
-export type Key = string;
-export interface InterfaceConfig {
-  iface: string;
-  /**
-   * PrivateKey specifies a private key configuration, if not nil.
-   */
-  pk: Key;
-  /**
-   * ListenPort specifies a device's listening port, if not nil.
-   */
-  listen: number /* uint16 */;
-  addr: string;
-  mtu?: number /* int */;
-  dns?: string[];
-  /**
-   * Disabled deactivates the interface on the agent: its link is torn down
-   * (or never brought up at startup) and its device config is not applied,
-   * while the config itself stays stored. Zero value (false) keeps the
-   * interface active, so configs written before this field existed stay up.
-   */
-  disabled?: boolean;
-  /**
-   * Table the routing table number
-   */
-  table?: number /* int */;
-  /**
-   * FirewallMark specifies a device's firewall mark, if not nil.
-   * If non-nil and set to 0, the firewall mark will be cleared.
-   */
-  fwMark?: number /* int */;
-  preUp?: string[]; // action that is executed before the device is up
-  postUp?: string[]; // action that is executed after the device is up
-  preDown?: string[]; // action that is executed before the device is down
-  postDown?: string[]; // action that is executed after the device is down
-  /**
-   * Peers specifies a list of peer configurations to apply to a device.
-   */
-  peers?: InterfacePeer[];
-  /**
-   * Junk Packet parameters
-   */
-  jc?: number /* int */; // Count
-  jmin?: number /* int */; // Min size
-  jmax?: number /* int */; // Max size
-  /**
-   * Message Padding parameters (bytes)
-   */
-  s1?: number /* int */; // Init
-  s2?: number /* int */; // Response
-  s3?: number /* int */; // Cookie
-  s4?: number /* int */; // Transport
-  /**
-   * Message Magic Headers
-   * In AmneziaWG 2.0 these should be ranges (e.g., "123456-123999")
-   */
-  h1?: string; // Init
-  h2?: string; // Response
-  h3?: string; // Cookie
-  h4?: string; // Transport
-  /**
-   * Init Packet Magic / Custom Signature (obfuscation)
-   * For client-side explicit setups only.
-   */
-  i1?: string;
-  i2?: string;
-  i3?: string;
-  i4?: string;
-  i5?: string;
-}
-export interface InterfacePeer {
-  key: Key;
-  psk?: Key;
-  ips: string[];
-  endpoint?: string;
-  /**
-   * Disabled deactivates this peer: it's kept in the stored InterfaceConfig
-   * but omitted from the device config applied via wgctrl (ToAmneziaConfig /
-   * ToWireguardPeers), so reconciliation removes the peer from the live
-   * interface and can't connect until reactivated. Zero value (false) keeps
-   * the peer active, so configs written before this field existed stay up.
-   */
-  disabled?: boolean;
-  keepalive: number /* time in nanoseconds (time.Duration) */;
-}
-export interface DeviceInfo {
-  name: string;
-  publicKey: Key;
-  type: any /* wgtypes.DeviceType */;
-  listenPort: number /* int */;
-  firewallMark: number /* int */;
-  isAmnezia: boolean;
-  peers: PeerInfo[];
-}
-export interface PeerInfo {
-  publicKey: Key;
-  endpoint: string;
-  lastHandshake: number /* time.Time */;
-  rx: number /* int64 */;
-  tx: number /* int64 */;
-  online: boolean;
-  updated_at: number /* time.Time */;
 }

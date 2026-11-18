@@ -16,18 +16,13 @@
 
 package models
 
-import (
-	"time"
-	"uuid"
-)
+import "uuid"
 
-// Topology is the protocol-neutral desired network configuration. VPN service
-// configs are opaque to the core and interpreted only by their plugin.
+// Topology contains only neutral presentation metadata. Desired VPN state is
+// stored in Resource and Link records.
 type Topology struct {
-	Servers     []TopologyServer    `json:"servers"`
-	Interfaces  []NetworkInterface  `json:"interfaces"`
-	Services    []VPNService        `json:"services"`
-	Connections []NetworkConnection `json:"connections"`
+	Servers    []TopologyServer   `json:"servers"`
+	Interfaces []NetworkInterface `json:"interfaces"`
 }
 
 type TopologyServer struct {
@@ -37,7 +32,6 @@ type TopologyServer struct {
 	Description       string    `json:"description,omitempty"`
 	Location          string    `json:"location,omitempty"`
 	LocationError     string    `json:"locationError,omitempty"`
-	Legacy            bool      `json:"legacy,omitempty"`
 	Latitude          *float64  `json:"latitude,omitempty"`
 	Longitude         *float64  `json:"longitude,omitempty"`
 	CoordinatesManual bool      `json:"coordinatesManual,omitempty"`
@@ -46,61 +40,16 @@ type TopologyServer struct {
 }
 
 type NetworkInterface struct {
-	ID        uuid.UUID  `json:"id"`
-	ServerID  uuid.UUID  `json:"serverId"`
-	Name      string     `json:"name"`
-	Address   string     `json:"address,omitempty"`
-	Legacy    bool       `json:"legacy,omitempty"`
-	ServiceID *uuid.UUID `json:"serviceId,omitempty"`
-	X         float64    `json:"x"`
-	Y         float64    `json:"y"`
-}
-
-type VPNService struct {
-	ID            uuid.UUID      `json:"id"`
-	ServerID      uuid.UUID      `json:"serverId"`
-	InterfaceID   *uuid.UUID     `json:"interfaceId,omitempty"`
-	PluginID      string         `json:"pluginId"`
-	Name          string         `json:"name"`
-	Config        map[string]any `json:"config"`
-	Status        string         `json:"status"`
-	StatusMessage string         `json:"statusMessage,omitempty"`
-	LastAppliedAt *time.Time     `json:"lastAppliedAt,omitempty"`
-}
-
-type NetworkConnection struct {
 	ID       uuid.UUID `json:"id"`
-	SourceID uuid.UUID `json:"sourceId"`
-	TargetID uuid.UUID `json:"targetId"`
+	ServerID uuid.UUID `json:"serverId"`
+	Name     string    `json:"name"`
+	Address  string    `json:"address,omitempty"`
+	X        float64   `json:"x"`
+	Y        float64   `json:"y"`
 }
 
 type NodePosition struct {
 	ID uuid.UUID `json:"id"`
 	X  float64   `json:"x"`
 	Y  float64   `json:"y"`
-}
-
-// PluginDescriptor describes a deployment plugin and the schemas consumed by
-// RJSF. ConfigSchema and UserSchema are deliberately independent: one describes
-// the application configuration, the other a single service user.
-type PluginDescriptor struct {
-	ID           string         `json:"id"`
-	Name         string         `json:"name"`
-	Version      string         `json:"version"`
-	Description  string         `json:"description,omitempty"`
-	ConfigSchema map[string]any `json:"configSchema"`
-	UserSchema   map[string]any `json:"userSchema"`
-	UISchema     map[string]any `json:"uiSchema,omitempty"`
-	Available    bool           `json:"available"`
-	Error        string         `json:"error,omitempty"`
-}
-
-type PluginStatus struct {
-	State   string `json:"state"`
-	Message string `json:"message,omitempty"`
-}
-
-type PluginUser struct {
-	ID   string         `json:"id"`
-	Data map[string]any `json:"data"`
 }

@@ -14,7 +14,6 @@
   See the License for the specific language governing permissions and
   limitations under the License.
  */
-import { type Key, type InterfaceConfig } from "./agent"
 
 //////////
 // source: agentrelease.go
@@ -163,149 +162,6 @@ export interface DeployStatus {
 }
 
 //////////
-// source: importplan.go
-
-/**
- * Interface kinds as reported by the agent (HostInfo.InterfaceKinds and
- * UnmanagedInterface.Kind) — the OS link type of a WireGuard-family device.
- */
-export const InterfaceKindAmnezia = "amneziawg";
-/**
- * Interface kinds as reported by the agent (HostInfo.InterfaceKinds and
- * UnmanagedInterface.Kind) — the OS link type of a WireGuard-family device.
- */
-export const InterfaceKindWireGuard = "wireguard";
-/**
- * UnmanagedInterface is a live WireGuard/AmneziaWG device on a server that
- * its agent has no stored config for — typically brought up by wg-quick/
- * awg-quick before the agent was installed. The admin-side twin of the agent's
- * models.UnmanagedInterface (same JSON shape; kept here so the admin builds
- * against the published agent module without a local replace). Read-only in
- * the UI: the way to take one over is the wg-quick import (ImportPreview).
- */
-export interface UnmanagedInterface {
-  /**
-   * Name is the OS interface name (e.g. "wg0", "awg0").
-   */
-  name: string;
-  /**
-   * Kind is the link type: InterfaceKindAmnezia or InterfaceKindWireGuard.
-   */
-  kind: string;
-}
-/**
- * ImportSource is a wg-quick/awg-quick conf file read from a server by its
- * agent (GET /interfaces/{name}/import-source) — the admin-side twin of the
- * agent's models.ImportSource.
- */
-export interface ImportSource {
-  path: string;
-  content: string;
-}
-/**
- * ImportPreview is the dry-run report of importing a wg-quick/awg-quick
- * interface from a server (Service.PreviewImport): what the import would
- * create, what it translated, and everything worth a second look before
- * confirming. It carries no private keys — the peer map the admin typed
- * already holds those, and the interface key never needs to round-trip.
- */
-export interface ImportPreview {
-  /**
-   * Interface is the OS interface name being imported.
-   */
-  interface: string;
-  /**
-   * Source is the conf file path on the server the config was read from.
-   */
-  source: string;
-  /**
-   * Live reports whether a link with this name is currently up on the server
-   * (the import then adopts it in place); false means the conf exists on
-   * disk but the interface is down, so the agent will create it.
-   */
-  live: boolean;
-  /**
-   * LiveKind is the live link's type (InterfaceKindAmnezia/InterfaceKindWireGuard)
-   * when Live, else empty.
-   */
-  liveKind?: string;
-  address: string;
-  listenPort: number /* uint16 */;
-  amnezia: boolean;
-  mtu?: number /* int */;
-  dns?: string[];
-  table?: number /* int */;
-  /**
-   * Users lists the users that will own imported peers — existing ones matched
-   * by exact name, missing ones created — with the peers assigned to each.
-   */
-  users: ImportPreviewUser[];
-  /**
-   * EmbeddedPeers are the conf's [Peer] sections the peer map didn't cover:
-   * imported as interface peers without a user (the client keeps working, but
-   * no config/QR can be rendered for it until it's re-issued).
-   */
-  embeddedPeers: ImportPreviewPeer[];
-  /**
-   * Hooks are the conf's own PreUp/PostUp/PreDown/PostDown, carried over
-   * verbatim (with %i as wg-quick expands it).
-   */
-  hooks: ImportPreviewHooks;
-  /**
-   * GeneratedHooks are the commands the import adds to reproduce what
-   * wg-quick did implicitly — routes for AllowedIPs outside the interface
-   * subnet, and the Table=N routes — appended after Hooks.
-   */
-  generatedHooks: ImportPreviewHooks;
-  /**
-   * Warnings are non-blocking findings (ignored keys, non-idempotent hooks,
-   * peers without keepalive, link-kind mismatches, …), in plain English.
-   */
-  warnings: string[];
-}
-/**
- * ImportPreviewUser is one user in an ImportPreview.
- */
-export interface ImportPreviewUser {
-  name: string;
-  /**
-   * Exists is true when a user of this name is already in the database (the
-   * peers are added to it), false when the import creates the user.
-   */
-  exists: boolean;
-  peers: ImportPreviewPeer[];
-}
-/**
- * ImportPreviewPeer is one peer in an ImportPreview, identified by public key.
- */
-export interface ImportPreviewPeer {
-  /**
-   * Name is the display name from the peer map; empty for an embedded peer.
-   */
-  name?: string;
-  publicKey: string;
-  allowedIPs: string[];
-  endpoint?: string;
-  /**
-   * Keepalive is the PersistentKeepalive in seconds, 0 when the conf had none.
-   */
-  keepalive: number /* int */;
-  /**
-   * PresharedKey reports whether the peer has a PSK (the key itself isn't shown).
-   */
-  presharedKey: boolean;
-}
-/**
- * ImportPreviewHooks groups lifecycle hook commands by phase.
- */
-export interface ImportPreviewHooks {
-  preUp?: string[];
-  postUp?: string[];
-  preDown?: string[];
-  postDown?: string[];
-}
-
-//////////
 // source: registry.go
 
 /**
@@ -372,7 +228,6 @@ export interface Server {
   info: ServerInfo;
   ssh: SSHConfig;
   agent: Agent;
-  interfaces?: string[];
   /**
    * Unmanaged marks inventory migrated from v1 until a v2 agent with the
    * required provider successfully adopts its resources.
@@ -404,6 +259,7 @@ export interface SSHConfig {
 export interface Agent {
   addr: string;
   tls?: AgentTLS;
+  installed?: boolean;
   /**
    * MonitoringDisabled, when true, turns off the agent's CPU/RAM/network/
    * peer metrics collection (see Service.SetServerMonitoring). Zero value
@@ -461,42 +317,17 @@ export interface CertKeyPair {
   cert: string;
   pk: string;
 }
-export interface Interface extends InterfaceConfig {
-  id: string;
-  provider?: string;
-  resourceName?: string;
-  /**
-   * Sync status of this interface's config against the agent. Updated
-   * after every push attempt (see internal/service's agent push wiring);
-   * not touched by the agent itself.
-   */
-  inSync: boolean;
-  lastSyncError?: string;
-  lastSyncedAt: number /* time.Time */;
-  /**
-   * Tunnel groups the interfaces that together form one multi-hop tunnel
-   * (see Service.BuildTunnel / the tunnel wizard): every interface a tunnel
-   * is built from carries the same id, nil means "not part of any tunnel".
-   * Admin-only bookkeeping — never pushed to the agent (only the embedded
-   * InterfaceConfig is), not shown or editable in the UI. Its only visible
-   * effects: it blocks deleting the interface while the tunnel exists, and
-   * the dashboard counts distinct tunnel ids.
-   */
-  tunnel?: string;
-}
 
 //////////
 // source: topology.go
 
 /**
- * Topology is the protocol-neutral desired network configuration. VPN service
- * configs are opaque to the core and interpreted only by their plugin.
+ * Topology contains only neutral presentation metadata. Desired VPN state is
+ * stored in Resource and Link records.
  */
 export interface Topology {
   servers: TopologyServer[];
   interfaces: NetworkInterface[];
-  services: VPNService[];
-  connections: NetworkConnection[];
 }
 export interface TopologyServer {
   id: string;
@@ -505,7 +336,6 @@ export interface TopologyServer {
   description?: string;
   location?: string;
   locationError?: string;
-  legacy?: boolean;
   latitude?: number /* float64 */;
   longitude?: number /* float64 */;
   coordinatesManual?: boolean;
@@ -517,88 +347,13 @@ export interface NetworkInterface {
   serverId: string;
   name: string;
   address?: string;
-  legacy?: boolean;
-  serviceId?: string;
   x: number /* float64 */;
   y: number /* float64 */;
-}
-export interface VPNService {
-  id: string;
-  serverId: string;
-  interfaceId?: string;
-  pluginId: string;
-  name: string;
-  config: { [key: string]: any};
-  status: string;
-  statusMessage?: string;
-  lastAppliedAt?: number /* time.Time */;
-}
-export interface NetworkConnection {
-  id: string;
-  sourceId: string;
-  targetId: string;
 }
 export interface NodePosition {
   id: string;
   x: number /* float64 */;
   y: number /* float64 */;
-}
-/**
- * PluginDescriptor describes a deployment plugin and the schemas consumed by
- * RJSF. ConfigSchema and UserSchema are deliberately independent: one describes
- * the application configuration, the other a single service user.
- */
-export interface PluginDescriptor {
-  id: string;
-  name: string;
-  version: string;
-  description?: string;
-  configSchema: { [key: string]: any};
-  userSchema: { [key: string]: any};
-  uiSchema?: { [key: string]: any};
-  available: boolean;
-  error?: string;
-}
-export interface PluginStatus {
-  state: string;
-  message?: string;
-}
-export interface PluginUser {
-  id: string;
-  data: { [key: string]: any};
-}
-
-//////////
-// source: tunnel.go
-
-/**
- * TunnelStep identifies one interface a tunnel is built from, given in order
- * (entry first, exit last). Input to Service.BuildTunnel.
- */
-export interface TunnelStep {
-  serverId: string;
-  ifaceId: string;
-}
-/**
- * TunnelMember is one interface belonging to a tunnel, for display in the
- * tunnel list. Role is derived from the interface's config ("entry" keeps its
- * listen port and relays; "exit" has none and NATs).
- */
-export interface TunnelMember {
-  serverId: string;
-  serverName: string;
-  ifaceId: string;
-  interface: string;
-  role: string;
-}
-/**
- * Tunnel is the derived view of the interfaces sharing one Tunnel id. It is
- * NOT persisted as its own entity — it's reconstructed from the Tunnel field
- * on models.Interface (see Service.ListTunnels).
- */
-export interface Tunnel {
-  id: string;
-  members: TunnelMember[];
 }
 
 //////////
@@ -623,20 +378,4 @@ export interface User {
   name: string;
   description?: string;
   disabled?: boolean;
-  peers?: Peer[];
-}
-export interface Peer {
-  name: string;
-  pk: Key;
-  interface: string;
-  provider?: string;
-  resourceName?: string;
-  disabled?: boolean;
-  /**
-   * DNS is the client-side DNS for this peer's generated wg-quick config
-   * (the `[Interface] DNS = …` line). Admin-only: it's never pushed to the
-   * agent (DNS is a client setting). Empty falls back to the owning
-   * interface's DNS in GetPeerConfig.
-   */
-  dns?: string[];
 }

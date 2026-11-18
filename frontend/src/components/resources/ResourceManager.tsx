@@ -16,15 +16,15 @@
 
 import {useCallback, useEffect, useMemo, useState} from 'react';
 import {useTranslation} from 'react-i18next';
-import {Edit2, FileInput, Network, Play, Plus, Power, RefreshCw, Trash2} from 'lucide-react';
+import {Edit2, FileInput, Network, Play, Plus, Power, PowerOff, QrCode, RefreshCw, RotateCcw, ShieldOff, Trash2} from 'lucide-react';
 import {toast} from 'sonner';
 import {ConfirmModal} from '@/components/common/ConfirmModal';
 import {FormField} from '@/components/common/FormField';
 import {Modal} from '@/components/common/Modal';
 import {buttons, inputs} from '@/components/common/controls';
-import {ImportInterfaceModal} from '@/components/server/ImportInterfaceModal';
 import {SchemaForm} from '@/components/topology/SchemaForm';
-import {listUnmanagedInterfaces, syncServer} from '@/services/servers';
+import {logError} from '@/services/errorReporting';
+import {syncServer} from '@/services/servers';
 import {
     deleteProviderResource,
     getProviderManifest,
@@ -32,11 +32,13 @@ import {
     listProviderResources,
     putProviderResource,
     runProviderResourceAction,
+    saveActionResult,
 } from '@/services/resources';
 import {cn} from '@/lib/utils';
-import type {ActionDefinition, ActionResult, ProviderDefinition, ProviderManifest, ProviderResource, ResourceDefinition, UnmanagedInterface} from '@/types';
+import {ClientConfigAction} from './ClientConfigAction';
+import type {ActionDefinition, ActionResult, ProviderDefinition, ProviderManifest, ProviderResource, ResourceDefinition} from '@/types';
 
-interface ListedResource {
+export interface ListedResource {
     provider: string;
     definition: ResourceDefinition;
     resource: ProviderResource;
@@ -48,36 +50,39 @@ interface EditorState {
     resource?: ProviderResource;
 }
 
-interface ActionState {
+export interface ActionState {
     item: ListedResource;
     action: ActionDefinition;
+    initialArguments?: Record<string, unknown>;
 }
 
-export function ResourceManager({serverId, onChanged}: {serverId: string; onChanged?: () => void}) {
+interface ResourceManagerProps {
+    serverId: string;
+    kind?: string;
+    userId?: string;
+    onChanged?: () => void;
+}
+
+export function ResourceManager({serverId, kind = 'Interface', userId, onChanged}: ResourceManagerProps) {
     const {t} = useTranslation();
     const [manifest, setManifest] = useState<ProviderManifest | null>(null);
     const [schemas, setSchemas] = useState<Record<string, ProviderDefinition>>({});
     const [resources, setResources] = useState<ListedResource[]>([]);
-    const [unmanaged, setUnmanaged] = useState<UnmanagedInterface[]>([]);
     const [loading, setLoading] = useState(true);
     const [syncing, setSyncing] = useState(false);
     const [editor, setEditor] = useState<EditorState | null>(null);
     const [deleting, setDeleting] = useState<ListedResource | null>(null);
     const [action, setAction] = useState<ActionState | null>(null);
-    const [importTarget, setImportTarget] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
 
     const load = useCallback(async () => {
-        const [nextManifest, nextUnmanaged] = await Promise.all([
-            getProviderManifest(serverId),
-            listUnmanagedInterfaces(serverId),
-        ]);
+        const nextManifest = await getProviderManifest(serverId);
         const definitions = await Promise.all(nextManifest.providers.map(provider => getProviderSchema(serverId, provider.name)));
         const nextSchemas = Object.fromEntries(definitions.map(definition => [definition.name, definition]));
         const lists = await Promise.all(nextManifest.providers.map(async provider => {
             const items = await listProviderResources(serverId, provider.name);
             return items.flatMap(resource => {
-                if (resource.kind !== 'Interface') return [];
+                if (resource.kind !== kind || userId && resource.spec.userRef !== userId) return [];
                 const definition = nextSchemas[provider.name]?.resources.find(item => item.kind === resource.kind);
                 return definition ? [{provider: provider.name, definition, resource}] : [];
             });
@@ -85,8 +90,7 @@ export function ResourceManager({serverId, onChanged}: {serverId: string; onChan
         setManifest(nextManifest);
         setSchemas(nextSchemas);
         setResources(lists.flat());
-        setUnmanaged(nextUnmanaged ?? []);
-    }, [serverId]);
+    }, [kind, serverId, userId]);
 
     const refresh = useCallback(async () => {
         try {
@@ -98,11 +102,15 @@ export function ResourceManager({serverId, onChanged}: {serverId: string; onChan
         }
     }, [load, t]);
 
+    useEffect(() => {
+        const timeout = window.setTimeout(() => void refresh(), 0);
+        return () => window.clearTimeout(timeout);
+    }, [refresh]);
+
     const sync = useCallback(async () => {
         setSyncing(true);
         try {
-            const ok = await syncServer(serverId);
-            if (!ok) {
+            if (!await syncServer(serverId)) {
                 toast.error(t('servers.syncError'));
                 return;
             }
@@ -116,15 +124,11 @@ export function ResourceManager({serverId, onChanged}: {serverId: string; onChan
         }
     }, [onChanged, refresh, serverId, t]);
 
-    useEffect(() => {
-        const timeout = window.setTimeout(() => void refresh(), 0);
-        return () => window.clearTimeout(timeout);
-    }, [refresh]);
-
-    const save = useCallback(async (editorState: EditorState, name: string, spec: Record<string, unknown>) => {
+    const save = useCallback(async (state: EditorState, name: string, spec: Record<string, unknown>) => {
         setBusy(true);
         try {
-            await putProviderResource(serverId, editorState.provider, editorState.kind, name, spec);
+            if (userId) spec = {...spec, userRef: userId};
+            await putProviderResource(serverId, state.provider, state.kind, name, spec);
             setEditor(null);
             await load();
             onChanged?.();
@@ -135,7 +139,7 @@ export function ResourceManager({serverId, onChanged}: {serverId: string; onChan
         } finally {
             setBusy(false);
         }
-    }, [load, onChanged, serverId, t]);
+    }, [load, onChanged, serverId, userId, t]);
 
     const toggleDisabled = useCallback(async (item: ListedResource) => {
         setBusy(true);
@@ -143,13 +147,14 @@ export function ResourceManager({serverId, onChanged}: {serverId: string; onChan
             const disabled = item.resource.spec.disabled === true;
             await putProviderResource(serverId, item.provider, item.resource.kind, item.resource.name, {...item.resource.spec, disabled: !disabled});
             await load();
+            onChanged?.();
             window.setTimeout(() => void load().catch(() => undefined), 750);
         } catch (error) {
             toast.error(error instanceof Error ? error.message : t('resources.saveError'));
         } finally {
             setBusy(false);
         }
-    }, [load, serverId, t]);
+    }, [load, onChanged, serverId, t]);
 
     const remove = useCallback(async () => {
         if (!deleting) return;
@@ -182,44 +187,18 @@ export function ResourceManager({serverId, onChanged}: {serverId: string; onChan
         }
     }, [load, onChanged, serverId]);
 
-    const supportsDisabled = (definition: ResourceDefinition) => {
-        const properties = definition.specSchema.properties as Record<string, {type?: string}> | undefined;
-        return properties?.disabled?.type === 'boolean';
-    };
-
-    const interfaceProviders = manifest?.providers.filter(provider => provider.resources.some(resource => resource.kind === 'Interface')) ?? [];
-
+    const providers = manifest?.providers.filter(provider => provider.resources.some(resource => resource.kind === kind)) ?? [];
     return (
         <div className="rounded-xl border border-border bg-card p-6 dark:border-white/5 dark:bg-white/3">
             <div className="mb-4 flex items-center justify-between">
-                <h2 className="flex items-center gap-2 text-lg font-semibold"><Network size={20} />{t('servers.interface')} ({resources.length})</h2>
+                <h2 className="flex items-center gap-2 text-lg font-semibold"><Network size={20} />{t(kind === 'Peer' ? 'users.peers' : 'servers.interface')} ({resources.length})</h2>
                 <div className="flex gap-2">
-                    <button
-                        type="button"
-                        onClick={() => void sync()}
-                        disabled={syncing || busy || loading}
-                        className={cn(buttons.secondary, 'inline-flex items-center gap-1.5')}
-                        title={t('servers.syncTooltip')}
-                    >
-                        <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => setImportTarget('')}
-                        className={cn(buttons.secondary, 'inline-flex items-center gap-1.5')}
-                        title={t('servers.import.rowHint')}
-                    ><FileInput size={14} /></button>
-                    <button
-                        type="button"
-                        onClick={() => setEditor({provider: '', kind: 'Interface'})}
-                        disabled={interfaceProviders.length === 0}
-                        className={buttons.primary}
-                        title={t('servers.addInterfaceTooltip')}
-                    ><Plus size={14} /></button>
+                    <button type="button" onClick={() => void sync()} disabled={syncing || busy || loading} className={cn(buttons.secondary, 'inline-flex items-center gap-1.5')} title={t('servers.syncTooltip')}><RefreshCw size={14} className={syncing ? 'animate-spin' : ''} /></button>
+                    <button type="button" onClick={() => setEditor({provider: '', kind})} disabled={providers.length === 0} className={buttons.primary} title={t('resources.add')}><Plus size={14} /></button>
                 </div>
             </div>
-            {loading ? <div className="py-8 text-center text-sm text-muted-foreground">{t('common.loading')}</div> : resources.length === 0 && unmanaged.length === 0 ? (
-                <div className="py-4 text-center text-muted-foreground">{t('servers.interfaces.noInterfaces')}</div>
+            {loading ? <div className="py-8 text-center text-sm text-muted-foreground">{t('common.loading')}</div> : resources.length === 0 ? (
+                <div className="py-4 text-center text-muted-foreground">{t('resources.empty')}</div>
             ) : (
                 <div className="space-y-3">
                     {resources.map(item => {
@@ -231,15 +210,15 @@ export function ResourceManager({serverId, onChanged}: {serverId: string; onChan
                                     <div className="min-w-0">
                                         <div className="flex flex-wrap items-center gap-2 text-sm font-semibold">
                                             <span className={cn('h-2 w-2 rounded-full', item.resource.status.phase === 'Ready' ? 'bg-emerald-500' : item.resource.status.phase === 'Degraded' ? 'bg-red-500' : 'bg-amber-500')} />
-                                            {item.resource.name}
+                                            {resourceDisplayName(item.resource)}
                                             <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-normal text-muted-foreground">{item.provider}/{item.resource.kind}</span>
                                         </div>
-                                        <div className="mt-1 text-xs text-muted-foreground">{item.resource.status.phase} · {t('resources.generation')} {item.resource.status.observedGeneration}/{item.resource.generation}</div>
+                                        <div className="mt-1 text-xs text-muted-foreground">{item.resource.status.phase}</div>
                                         {condition?.message && <div className={cn('mt-2 text-xs', condition.status === 'False' ? 'text-red-500' : 'text-muted-foreground')}>{condition.reason}: {condition.message}</div>}
                                     </div>
                                     <div className="flex shrink-0 gap-2">
-                                        {item.definition.actions?.map(actionDefinition => <button key={actionDefinition.name} type="button" disabled={busy} onClick={() => setAction({item, action: actionDefinition})} title={actionDefinition.title} aria-label={actionDefinition.title} className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground">{actionDefinition.name === 'importSecret' ? <FileInput size={15} /> : <Play size={15} />}</button>)}
-                                        {supportsDisabled(item.definition) && <button type="button" disabled={busy} onClick={() => void toggleDisabled(item)} title={disabled ? t('resources.activate') : t('resources.deactivate')} className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"><Power size={16} /></button>}
+                                        {item.definition.actions?.map(actionDefinition => <button key={actionDefinition.name} type="button" disabled={busy} onClick={() => setAction({item, action: actionDefinition})} title={actionDefinition.title} aria-label={actionDefinition.title} className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"><ActionIcon name={actionDefinition.name} /></button>)}
+                                        {supportsDisabled(item.definition) && <button type="button" disabled={busy} onClick={() => void toggleDisabled(item)} title={disabled ? t('resources.activate') : t('resources.deactivate')} className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground">{disabled ? <Power size={16} /> : <PowerOff size={16} />}</button>}
                                         <button type="button" disabled={busy} onClick={() => setEditor({provider: item.provider, kind: item.resource.kind, resource: item.resource})} title={t('common.edit')} className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"><Edit2 size={16} /></button>
                                         <button type="button" disabled={busy} onClick={() => setDeleting(item)} title={t('common.delete')} className="rounded p-1 text-muted-foreground hover:bg-red-100 hover:text-red-600 dark:hover:bg-red-500/10"><Trash2 size={16} /></button>
                                     </div>
@@ -249,62 +228,56 @@ export function ResourceManager({serverId, onChanged}: {serverId: string; onChan
                     })}
                 </div>
             )}
-            {unmanaged.length > 0 && (
-                <div className="mt-3 space-y-3">
-                    {unmanaged.map(item => (
-                        <div key={item.name} className="flex items-center justify-between rounded-lg border border-dashed border-amber-300/70 bg-background p-4 dark:border-amber-500/30 dark:bg-white/5">
-                            <div className="flex items-center gap-2 text-sm font-semibold">
-                                <Network size={16} />
-                                {item.name}
-                                <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-400">{t('servers.import.notManagedBadge')}</span>
-                                <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs font-medium text-muted-foreground">{item.kind}</span>
-                            </div>
-                            <button type="button" onClick={() => setImportTarget(item.name)} className={cn(buttons.secondary, 'inline-flex items-center gap-1.5 px-3 py-1')} title={t('servers.import.rowHint')}>
-                                <FileInput size={14} />{t('servers.import.button')}
-                            </button>
-                        </div>
-                    ))}
-                </div>
-            )}
-            {importTarget !== null && (
-                <ImportInterfaceModal
-                    serverId={serverId}
-                    initialInterface={importTarget}
-                    unmanaged={unmanaged}
-                    onClose={() => setImportTarget(null)}
-                    onImported={() => {
-                        setImportTarget(null);
-                        onChanged?.();
-                        void refresh();
-                    }}
-                />
-            )}
-            {editor && (!editor.provider || schemas[editor.provider]) && (
-                <ResourceEditor
-                    key={`${editor.provider}:${editor.kind}:${editor.resource?.id ?? 'new'}`}
-                    state={editor}
-                    manifest={manifest}
-                    schemas={schemas}
-                    busy={busy}
-                    onStateChange={setEditor}
-                    onClose={() => setEditor(null)}
-                    onSave={(name, spec) => void save(editor, name, spec)}
-                />
-            )}
+            {editor && (!editor.provider || schemas[editor.provider]) && <ResourceEditor key={`${editor.provider}:${editor.kind}:${editor.resource?.id ?? 'new'}`} state={editor} manifest={manifest} schemas={schemas} userId={userId} busy={busy} onStateChange={setEditor} onClose={() => setEditor(null)} onSave={(name, spec) => void save(editor, name, spec)} />}
             {action && <ResourceAction state={action} busy={busy} onClose={() => setAction(null)} onExecute={executeAction} />}
-            {deleting && <ConfirmModal title={t('resources.deleteTitle')} message={t('resources.deleteConfirm', {name: deleting.resource.name})} onCancel={() => setDeleting(null)} onConfirm={() => void remove()} loading={busy} />}
+            {deleting && <ConfirmModal title={t('resources.deleteTitle')} message={t('resources.deleteConfirm', {name: resourceDisplayName(deleting.resource)})} onCancel={() => setDeleting(null)} onConfirm={() => void remove()} loading={busy} />}
         </div>
     );
 }
 
-function ResourceAction({state, busy, onClose, onExecute}: {
+function ActionIcon({name}: {name: string}) {
+    switch (name) {
+        case 'importSecret':
+            return <FileInput size={15} />;
+        case 'renderClientConfig':
+            return <QrCode size={16} />;
+        case 'rotateKeys':
+            return <RefreshCw size={15} />;
+        case 'revoke':
+            return <ShieldOff size={15} />;
+        case 'restart':
+            return <RotateCcw size={15} />;
+        default:
+            return <Play size={15} />;
+    }
+}
+
+function resourceDisplayName(resource: ProviderResource): string {
+    return typeof resource.spec.name === 'string' && resource.spec.name.length > 0 ? resource.spec.name : resource.name;
+}
+
+function supportsDisabled(definition: ResourceDefinition): boolean {
+    const properties = definition.specSchema.properties as Record<string, {type?: string}> | undefined;
+    return properties?.disabled?.type === 'boolean';
+}
+
+interface ResourceActionProps {
     state: ActionState;
     busy: boolean;
     onClose: () => void;
     onExecute: (state: ActionState, args: Record<string, unknown>) => Promise<ActionResult>;
-}) {
+}
+
+export function ResourceAction(props: ResourceActionProps) {
+    if (props.state.action.name === 'renderClientConfig') {
+        return <ClientConfigAction state={props.state} onClose={props.onClose}/>;
+    }
+    return <GenericResourceAction {...props}/>;
+}
+
+function GenericResourceAction({state, busy, onClose, onExecute}: ResourceActionProps) {
     const {t} = useTranslation();
-    const [formData, setFormData] = useState<Record<string, unknown>>({});
+    const [formData, setFormData] = useState<Record<string, unknown>>(state.initialArguments ?? {});
     const [result, setResult] = useState<ActionResult | null>(null);
     const [error, setError] = useState<string | null>(null);
     const schema = state.action.argumentsSchema ?? {type: 'object', properties: {}};
@@ -313,25 +286,15 @@ function ResourceAction({state, busy, onClose, onExecute}: {
         try {
             setResult(await onExecute(state, args));
         } catch (cause) {
-            setError(cause instanceof Error ? cause.message : t('resources.actionError'));
+            const message = cause instanceof Error ? cause.message : t('resources.actionError');
+            setError(message);
+            logError(state.action.title, message);
         }
     };
-    const resultText = result?.type === 'file' && typeof result.data === 'string'
-        ? result.data
-        : result ? JSON.stringify(result.data ?? {taskId: result.taskId}, null, 2) : '';
-    const download = () => {
-        if (!result || result.type !== 'file') return;
-        const url = URL.createObjectURL(new Blob([resultText], {type: result.mediaType || 'text/plain'}));
-        const anchor = document.createElement('a');
-        anchor.href = url;
-        anchor.download = result.fileName || 'result.txt';
-        anchor.click();
-        URL.revokeObjectURL(url);
-    };
-
+    const resultText = result?.type === 'file' && typeof result.data === 'string' ? result.data : result ? JSON.stringify(result.data ?? {taskId: result.taskId}, null, 2) : '';
     return (
         <Modal title={state.action.title} onClose={onClose} loading={busy} size="lg">
-            <div className="mb-3 text-sm text-muted-foreground">{state.item.resource.name} · {state.item.provider}/{state.item.resource.kind}</div>
+            <div className="mb-3 text-sm text-muted-foreground">{resourceDisplayName(state.item.resource)} · {state.item.provider}/{state.item.resource.kind}</div>
             {state.action.description && <p className="mb-4 text-sm text-muted-foreground">{state.action.description}</p>}
             {state.action.requiresConfirmation && !result && <p className="mb-4 rounded-lg bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-300">{t('resources.actionConfirm')}</p>}
             {error && <p className="mb-4 rounded-lg bg-red-500/10 p-3 text-sm text-red-600 dark:text-red-400">{error}</p>}
@@ -339,21 +302,20 @@ function ResourceAction({state, busy, onClose, onExecute}: {
                 <div>
                     <pre className="max-h-96 overflow-auto rounded-lg bg-muted p-4 text-xs whitespace-pre-wrap">{resultText}</pre>
                     <div className="mt-4 flex justify-end gap-2">
-                        {result.type === 'file' && <button type="button" onClick={download} className={buttons.secondary}>{t('resources.download')}</button>}
+                        {result.type === 'file' && <button type="button" onClick={() => void saveActionResult(result, resultText)} className={buttons.secondary}>{t('resources.download')}</button>}
                         <button type="button" onClick={onClose} className={buttons.primary}>{t('common.close')}</button>
                     </div>
                 </div>
-            ) : (
-                <SchemaForm schema={schema} uiSchema={state.action.uiSchema} formData={formData} onChange={setFormData} onSubmit={execute} submitLabel={busy ? t('common.saving') : state.action.title} disabled={busy} />
-            )}
+            ) : <SchemaForm schema={schema} uiSchema={state.action.uiSchema} formData={formData} onChange={setFormData} onSubmit={execute} submitLabel={busy ? t('common.saving') : state.action.title} disabled={busy} />}
         </Modal>
     );
 }
 
-function ResourceEditor({state, manifest, schemas, busy, onStateChange, onClose, onSave}: {
+function ResourceEditor({state, manifest, schemas, userId, busy, onStateChange, onClose, onSave}: {
     state: EditorState;
     manifest: ProviderManifest | null;
     schemas: Record<string, ProviderDefinition>;
+    userId?: string;
     busy: boolean;
     onStateChange: (state: EditorState) => void;
     onClose: () => void;
@@ -362,13 +324,13 @@ function ResourceEditor({state, manifest, schemas, busy, onStateChange, onClose,
     const {t} = useTranslation();
     const [step, setStep] = useState<'provider' | 'settings'>(state.resource ? 'settings' : 'provider');
     const [name, setName] = useState(state.resource?.name ?? '');
-    const [formData, setFormData] = useState<Record<string, unknown>>(state.resource?.spec ?? {});
+    const [formData, setFormData] = useState<Record<string, unknown>>({...state.resource?.spec, ...(userId ? {userRef: userId} : {})});
     const providers = useMemo(() => manifest?.providers.filter(provider => provider.resources.some(resource => resource.kind === state.kind)) ?? [], [manifest, state.kind]);
     const definition = useMemo(() => schemas[state.provider]?.resources.find(item => item.kind === state.kind), [schemas, state.provider, state.kind]);
 
     if (step === 'provider') {
         return (
-            <Modal title={t('servers.interfaces.addTitle')} onClose={onClose} loading={busy} size="lg">
+            <Modal title={t('resources.add')} onClose={onClose} loading={busy} size="lg">
                 <FormField label={t('resources.provider')}>
                     <select autoFocus value={state.provider} disabled={busy} onChange={event => onStateChange({provider: event.target.value, kind: state.kind})} className={inputs.primary}>
                         <option value="">{t('resources.selectProvider')}</option>
@@ -383,21 +345,17 @@ function ResourceEditor({state, manifest, schemas, busy, onStateChange, onClose,
         );
     }
     if (!definition) return null;
-
+    const uiSchema = {
+        ...definition.uiSchema,
+        ...(state.resource?.kind === 'Interface' ? {iface: {'ui:readOnly': true}, name: {'ui:readOnly': true}} : {}),
+        ...(userId ? {userRef: {'ui:widget': 'hidden'}} : {}),
+    };
     return (
-        <Modal title={state.resource ? t('servers.interfaces.editTitle') : t('servers.interfaces.addTitle')} onClose={onClose} loading={busy} size="lg">
-            <div className="mb-4 rounded-lg bg-muted px-3 py-2 text-sm">
-                <span className="text-muted-foreground">{t('resources.provider')}: </span>
-                <span className="font-semibold">{state.provider}</span>
-                <span className="ml-2 font-mono text-xs text-muted-foreground">{definition.apiVersion}</span>
-            </div>
+        <Modal title={state.resource ? t('resources.edit') : t('resources.add')} onClose={onClose} loading={busy} size="lg">
+            <div className="mb-4 rounded-lg bg-muted px-3 py-2 text-sm"><span className="text-muted-foreground">{t('resources.provider')}: </span><span className="font-semibold">{state.provider}</span><span className="ml-2 font-mono text-xs text-muted-foreground">{definition.apiVersion}</span></div>
             {!state.resource && <button type="button" onClick={() => setStep('provider')} disabled={busy} className={cn(buttons.secondary, 'mb-4')}>{t('common.back')}</button>}
-            <div className="mb-4">
-                <FormField label={t('resources.name')}>
-                    <input required value={name} disabled={busy || !!state.resource} onChange={event => setName(event.target.value)} className={inputs.primary} />
-                </FormField>
-            </div>
-            <SchemaForm schema={definition.specSchema} uiSchema={definition.uiSchema} formData={formData} onChange={setFormData} onSubmit={spec => onSave(name.trim(), spec)} submitLabel={busy ? t('common.saving') : t('common.save')} disabled={busy || !name.trim()} />
+            <div className="mb-4"><FormField label={t('resources.name')}><input required value={name} disabled={busy || Boolean(state.resource)} onChange={event => setName(event.target.value)} className={inputs.primary} /></FormField></div>
+            <SchemaForm schema={definition.specSchema} uiSchema={uiSchema} formData={formData} onChange={setFormData} onSubmit={spec => onSave(name.trim(), spec)} submitLabel={busy ? t('common.saving') : t('common.save')} disabled={busy || !name.trim()} />
         </Modal>
     );
 }

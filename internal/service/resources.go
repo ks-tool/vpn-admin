@@ -18,10 +18,12 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"sync"
 	"time"
@@ -30,6 +32,7 @@ import (
 	"github.com/ks-tool/vpn-admin/internal/agentclient"
 	"github.com/ks-tool/vpn-admin/models"
 	"github.com/ks-tool/vpn-admin/storage"
+	"github.com/skip2/go-qrcode"
 )
 
 var ErrProviderNotFound = errors.New("provider not found in agent manifest")
@@ -100,21 +103,30 @@ func (s *Service) GetProviderSchema(serverID, providerName string) (*models.Prov
 	if provider == nil {
 		return nil, fmt.Errorf("%w: %s", ErrProviderNotFound, providerName)
 	}
-	if len(provider.Resources) > 0 {
+	complete := len(provider.Resources) > 0
+	for _, resource := range provider.Resources {
+		complete = complete && len(resource.SchemaHash) > 0
+	}
+	if complete {
 		return provider, nil
 	}
 	if cached, ok := s.providerRegistry.cached(serverID, providerName, provider.Version); ok && definitionsEqual(cached.Resources, provider.Resources) {
 		return &cached, nil
 	}
+	definition, err := s.fetchProviderSchema(serverID, providerName)
+	if err == nil {
+		s.providerRegistry.store(serverID, provider.Version, *definition)
+	}
+	return definition, err
+}
+
+func (s *Service) fetchProviderSchema(serverID, providerName string) (*models.ProviderDefinition, error) {
 	var definition *models.ProviderDefinition
-	err = s.withAgent(serverID, func(ctx context.Context, client *agentclient.Client) error {
+	err := s.withAgent(serverID, func(ctx context.Context, client *agentclient.Client) error {
 		var err error
 		definition, err = client.ProviderSchema(ctx, providerName)
 		return err
 	})
-	if err == nil {
-		s.providerRegistry.store(serverID, provider.Version, *definition)
-	}
 	return definition, err
 }
 
@@ -130,7 +142,30 @@ func (s *Service) remoteProviderResources(serverID, provider string) ([]models.R
 	return resources, nil
 }
 
+func sortProviderResources(resources []models.Resource, definition *models.ProviderDefinition) {
+	orders := make(map[string]int, len(definition.Resources))
+	for _, item := range definition.Resources {
+		orders[item.Kind] = item.ReconcileOrder
+	}
+	sort.SliceStable(resources, func(i, j int) bool {
+		left, right := orders[resources[i].Kind], orders[resources[j].Kind]
+		if left != right {
+			return left < right
+		}
+		if resources[i].Kind != resources[j].Kind {
+			return resources[i].Kind < resources[j].Kind
+		}
+		return resources[i].Name < resources[j].Name
+	})
+}
+
 func (s *Service) ListProviderResources(serverID, provider string) ([]models.Resource, error) {
+	unlock := s.lockResourceSync(serverID)
+	defer unlock()
+	return s.listProviderResources(serverID, provider, false)
+}
+
+func (s *Service) listProviderResources(serverID, provider string, adopt bool) ([]models.Resource, error) {
 	definition, err := s.GetProviderSchema(serverID, provider)
 	if err != nil {
 		return nil, err
@@ -161,28 +196,84 @@ func (s *Service) ListProviderResources(serverID, provider string) ([]models.Res
 		if apiVersion, ok := supported[item.Kind]; ok {
 			item.APIVersion = apiVersion
 		}
-		if localItem, ok := localByName[key]; ok {
-			if err := s.migrateProviderResourceSecret(serverID, definition, localItem); err != nil {
+		localItem, managed := localByName[key]
+		if managed && !adopt && localItem.ID != item.ID {
+			return nil, fmt.Errorf("resource id conflict for %s %s: local %s, remote %s", item.Kind, item.Name, localItem.ID, item.ID)
+		}
+		if managed && adopt && localItem.ID != item.ID {
+			desired := localItem
+			desired.APIVersion = item.APIVersion
+			desired.Generation = 0
+			var recreated *models.Resource
+			if err := s.withAgent(serverID, func(ctx context.Context, client *agentclient.Client) error {
+				if err := client.DeleteResource(ctx, provider, item.Kind, item.Name); err != nil {
+					return err
+				}
+				var err error
+				recreated, err = client.PutResource(ctx, provider, desired.Kind, desired.Name, desired)
+				return err
+			}); err != nil {
 				return nil, err
 			}
+			if err := s.pushProviderResourceSecret(serverID, definition, *recreated); err != nil {
+				return nil, err
+			}
+			if err := s.saveProviderResource(serverID, *recreated); err != nil {
+				return nil, err
+			}
+			result = append(result, *recreated)
+			continue
 		}
-		if err := s.saveProviderResource(serverID, item); err != nil {
-			return nil, err
+		if managed && reflect.DeepEqual(localItem.Spec, item.Spec) {
+			secretItem := localItem
+			secretItem.Generation = item.Generation
+			secretItem.Status.ObservedGeneration = item.Status.ObservedGeneration
+			secretItem.Status.Provider = item.Status.Provider
+			secretItem.Status.Conditions = append(append([]models.Condition(nil), localItem.Status.Conditions...), item.Status.Conditions...)
+			if err := s.syncProviderResourceSecret(serverID, definition, secretItem); err != nil {
+				return nil, err
+			}
+			item.Spec = localItem.Spec
+			if err := s.saveProviderResource(serverID, item); err != nil {
+				return nil, err
+			}
+			result = append(result, item)
+			continue
+		}
+		if managed {
+			desired := localItem
+			desired.APIVersion = item.APIVersion
+			desired.Generation = item.Generation
+			var updated *models.Resource
+			if err := s.withAgent(serverID, func(ctx context.Context, client *agentclient.Client) error {
+				var err error
+				updated, err = client.PutResource(ctx, provider, desired.Kind, desired.Name, desired)
+				return err
+			}); err != nil {
+				return nil, err
+			}
+			if err := s.syncProviderResourceSecret(serverID, definition, *updated); err != nil {
+				return nil, err
+			}
+			if err := s.saveProviderResource(serverID, *updated); err != nil {
+				return nil, err
+			}
+			result = append(result, *updated)
+			continue
+		}
+		if adopt {
+			if err := s.saveProviderResource(serverID, item); err != nil {
+				return nil, err
+			}
+		} else {
+			item.Status.Conditions = append(item.Status.Conditions, models.Condition{
+				Type: "Managed", Status: models.ConditionFalse, Reason: "RemoteOnly", Message: "resource exists only on the agent",
+				ObservedGeneration: item.Generation, LastTransitionTime: time.Now().UTC(),
+			})
 		}
 		result = append(result, item)
 	}
-	sort.SliceStable(local, func(i, j int) bool {
-		if local[i].Kind == local[j].Kind {
-			return local[i].Name < local[j].Name
-		}
-		if local[i].Kind == "Interface" {
-			return true
-		}
-		if local[j].Kind == "Interface" {
-			return false
-		}
-		return local[i].Kind == "Peer"
-	})
+	sortProviderResources(local, definition)
 	for _, item := range local {
 		if providerFromAPIVersion(item.APIVersion) != provider {
 			continue
@@ -195,16 +286,17 @@ func (s *Service) ListProviderResources(serverID, provider string) ([]models.Res
 			continue
 		}
 		if item.Status.Phase == models.ResourceDeleting {
-			if err := s.removeLegacyResource(serverID, item); err != nil {
-				return nil, err
-			}
 			id, _ := uuid.Parse(serverID)
 			if err := s.store.Resources(id).Delete(item.ID); err != nil {
+				return nil, err
+			}
+			if err := s.store.Secrets().Delete(item.ID); err != nil {
 				return nil, err
 			}
 			continue
 		}
 		item.APIVersion = apiVersion
+		item.Generation = 0
 		var created *models.Resource
 		if err := s.withAgent(serverID, func(ctx context.Context, client *agentclient.Client) error {
 			var err error
@@ -213,7 +305,7 @@ func (s *Service) ListProviderResources(serverID, provider string) ([]models.Res
 		}); err != nil {
 			return nil, err
 		}
-		if err := s.restoreProviderResourceSecret(serverID, definition, item); err != nil {
+		if err := s.pushProviderResourceSecret(serverID, definition, *created); err != nil {
 			return nil, err
 		}
 		created.APIVersion = apiVersion
@@ -226,10 +318,19 @@ func (s *Service) ListProviderResources(serverID, provider string) ([]models.Res
 }
 
 func (s *Service) completeServerMigration(server *models.Server) error {
+	unlock := s.lockResourceSync(server.ID.String())
+	defer unlock()
+	return s.completeServerMigrationLocked(server)
+}
+
+func (s *Service) completeServerMigrationLocked(server *models.Server) error {
 	if !server.Unmanaged {
 		return nil
 	}
-	resources, err := s.ListProviderResources(server.ID.String(), "awg")
+	if err := s.repairMigratedTunnelPeers(server.ID.String()); err != nil {
+		return err
+	}
+	resources, err := s.listProviderResources(server.ID.String(), "awg", true)
 	if err != nil {
 		return err
 	}
@@ -292,7 +393,7 @@ func (s *Service) waitProviderResourcesReady(serverID, provider string, resource
 }
 
 func (s *Service) PutProviderResource(serverID, provider, kind, name string, spec json.RawMessage) (*models.Resource, error) {
-	if name == "" || !json.Valid(spec) {
+	if len(name) == 0 || !json.Valid(spec) {
 		return nil, invalidInput("resource name and valid JSON spec are required")
 	}
 	definition, err := s.GetProviderSchema(serverID, provider)
@@ -309,17 +410,45 @@ func (s *Service) PutProviderResource(serverID, provider, kind, name string, spe
 	if resourceDefinition == nil {
 		return nil, invalidInput("resource kind is not supported by provider")
 	}
-	desired := models.Resource{ServerID: serverID, APIVersion: resourceDefinition.APIVersion, Kind: kind, Name: name, Spec: spec}
-	resources, err := s.ListProviderResources(serverID, provider)
+	spec, err = s.applyPeerUserState(kind, spec)
 	if err != nil {
 		return nil, err
 	}
-	for _, existing := range resources {
-		if existing.Kind == kind && existing.Name == name {
-			desired.ID = existing.ID
-			desired.Generation = existing.Generation
+	desired := models.Resource{ServerID: serverID, APIVersion: resourceDefinition.APIVersion, Kind: kind, Name: name, Spec: spec}
+	local, err := s.localProviderResources(serverID)
+	if err != nil {
+		return nil, err
+	}
+	var managed *models.Resource
+	for index := range local {
+		if local[index].Kind == kind && local[index].Name == name && providerFromAPIVersion(local[index].APIVersion) == provider {
+			managed = &local[index]
 			break
 		}
+	}
+	remote, err := s.remoteProviderResources(serverID, provider)
+	if err != nil {
+		return nil, err
+	}
+	var existing *models.Resource
+	for index := range remote {
+		if remote[index].Kind == kind && remote[index].Name == name {
+			existing = &remote[index]
+			break
+		}
+	}
+	if managed == nil && existing != nil {
+		return nil, invalidInput("resource exists only on the agent; explicit adoption is required")
+	}
+	if managed != nil {
+		desired.ID = managed.ID
+	}
+	if existing != nil {
+		if managed != nil && managed.ID != existing.ID {
+			return nil, fmt.Errorf("resource id conflict for %s %s: local %s, remote %s", kind, name, managed.ID, existing.ID)
+		}
+		desired.ID = existing.ID
+		desired.Generation = existing.Generation
 	}
 	var result *models.Resource
 	err = s.withAgent(serverID, func(ctx context.Context, client *agentclient.Client) error {
@@ -417,17 +546,17 @@ func (s *Service) DeleteProviderResource(serverID, provider, kind, name string) 
 		time.Sleep(100 * time.Millisecond)
 	}
 	if selected != nil {
-		if err := s.removeLegacyResource(serverID, *selected); err != nil {
+		id, _ := uuid.Parse(serverID)
+		if err := s.store.Resources(id).Delete(selected.ID); err != nil {
 			return err
 		}
-		id, _ := uuid.Parse(serverID)
-		return s.store.Resources(id).Delete(selected.ID)
+		return s.store.Secrets().Delete(selected.ID)
 	}
 	return nil
 }
 
-func (s *Service) migrateProviderResourceSecret(serverID string, definition *models.ProviderDefinition, item models.Resource) error {
-	pending := false
+func (s *Service) syncProviderResourceSecret(serverID string, definition *models.ProviderDefinition, item models.Resource) error {
+	pending := item.Generation > item.Status.ObservedGeneration
 	for _, condition := range item.Status.Conditions {
 		if condition.Type == "Secrets" && condition.Reason == "SecretMigrationPending" {
 			pending = true
@@ -435,12 +564,39 @@ func (s *Service) migrateProviderResourceSecret(serverID string, definition *mod
 		}
 	}
 	if !pending {
+		var providerStatus struct {
+			SecretMigrationPending bool `json:"secretMigrationPending"`
+		}
+		if json.Unmarshal(item.Status.Provider, &providerStatus) == nil {
+			pending = providerStatus.SecretMigrationPending
+		}
+	}
+	if !pending {
 		return nil
 	}
-	return s.restoreProviderResourceSecret(serverID, definition, item)
+	return s.pushProviderResourceSecret(serverID, definition, item)
 }
 
-func (s *Service) restoreProviderResourceSecret(serverID string, definition *models.ProviderDefinition, item models.Resource) error {
+func (s *Service) pushProviderResourceSecret(serverID string, definition *models.ProviderDefinition, item models.Resource) error {
+	secret, err := s.store.Secrets().Get(item.ID)
+	if storage.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	arguments, err := providerSecretArguments(secret)
+	if err != nil {
+		return err
+	}
+	if len(arguments) == 0 {
+		return nil
+	}
+	liveDefinition, err := s.fetchProviderSchema(serverID, definition.Name)
+	if err != nil {
+		return err
+	}
+	definition = liveDefinition
 	actionAvailable := false
 	for _, resourceDefinition := range definition.Resources {
 		if resourceDefinition.Kind != item.Kind {
@@ -453,110 +609,10 @@ func (s *Service) restoreProviderResourceSecret(serverID string, definition *mod
 		}
 	}
 	if !actionAvailable {
-		return nil
+		return fmt.Errorf("provider %s does not support secret import for %s", definition.Name, item.Kind)
 	}
-	if item.Kind == "Interface" {
-		serverUUID, err := uuid.Parse(serverID)
-		if err != nil {
-			return err
-		}
-		interfaceID, err := uuid.Parse(item.ID)
-		if err != nil {
-			return nil
-		}
-		iface, err := s.store.Servers().Interfaces(serverUUID).Get(interfaceID)
-		if err != nil {
-			return err
-		}
-		arguments, err := json.Marshal(map[string]any{
-			"privateKey": iface.PrivateKey.String(), "preUp": iface.PreUp, "postUp": iface.PostUp,
-			"preDown": iface.PreDown, "postDown": iface.PostDown,
-		})
-		if err != nil {
-			return err
-		}
-		_, err = s.RunProviderResourceAction(serverID, definition.Name, item.Kind, item.Name, "importSecret", arguments)
-		return err
-	}
-
-	var spec struct {
-		UserRef      string `json:"userRef"`
-		InterfaceRef string `json:"interfaceRef"`
-		PublicKey    string `json:"publicKey"`
-	}
-	if err := json.Unmarshal(item.Spec, &spec); err != nil {
-		return err
-	}
-	if len(spec.UserRef) == 0 {
-		if definition.Name != "awg" {
-			return nil
-		}
-		serverUUID, err := uuid.Parse(serverID)
-		if err != nil {
-			return err
-		}
-		interfaceID, err := uuid.Parse(spec.InterfaceRef)
-		if err != nil {
-			return nil
-		}
-		iface, err := s.store.Servers().Interfaces(serverUUID).Get(interfaceID)
-		if storage.IsNotFound(err) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		for _, peer := range iface.Peers {
-			if peer.Key.String() != spec.PublicKey || peer.PresharedKey == nil {
-				continue
-			}
-			supported, err := s.peerSupportsPresharedOnlyImport(serverID)
-			if err != nil || !supported {
-				return err
-			}
-			raw, err := json.Marshal(map[string]string{"presharedKey": peer.PresharedKey.String()})
-			if err != nil {
-				return err
-			}
-			_, err = s.RunProviderResourceAction(serverID, definition.Name, item.Kind, item.Name, "importSecret", raw)
-			return err
-		}
-		return nil
-	}
-	userID, err := uuid.Parse(spec.UserRef)
-	if err != nil {
-		return nil
-	}
-	user, err := s.store.Users().Get(userID)
-	if err != nil {
-		return err
-	}
-	for _, peer := range user.Peers {
-		publicKey := peer.PrivateKey.PublicKey()
-		if publicKey.String() != spec.PublicKey {
-			continue
-		}
-		arguments := map[string]string{"privateKey": peer.PrivateKey.String()}
-		if peer.InterfaceId != uuid.Nil() {
-			iface, _, err := s.getInterfaceByID(peer.InterfaceId)
-			if err != nil {
-				return err
-			}
-			for _, configured := range iface.Peers {
-				if configured.Key.String() == spec.PublicKey && configured.PresharedKey != nil {
-					arguments["presharedKey"] = configured.PresharedKey.String()
-					break
-				}
-			}
-		}
-		raw, err := json.Marshal(arguments)
-		if err != nil {
-			return err
-		}
-		_, err = s.RunProviderResourceAction(serverID, definition.Name, item.Kind, item.Name, "importSecret", raw)
-		return err
-	}
-	return errors.New("legacy peer secret was not found")
+	_, err = s.RunProviderResourceAction(serverID, definition.Name, item.Kind, item.Name, "importSecret", arguments)
+	return err
 }
 
 func (s *Service) localProviderResources(serverID string) ([]models.Resource, error) {
@@ -573,9 +629,6 @@ func (s *Service) saveProviderResource(serverID string, resource models.Resource
 		return invalidInput("invalid server id")
 	}
 	resource.ServerID = serverID
-	if err := s.syncLegacyResource(serverID, resource); err != nil {
-		return err
-	}
 	return s.store.Resources(id).Set(&resource)
 }
 
@@ -602,19 +655,35 @@ func (s *Service) RunProviderResourceAction(serverID, provider, kind, name, acti
 		result, err = client.RunResourceAction(ctx, provider, kind, name, action, arguments)
 		return err
 	})
-	if err != nil || action != "rotateKeys" {
-		return result, err
+	return result, err
+}
+
+type ProviderClientConfig struct {
+	Text      string `json:"text"`
+	QRCode    string `json:"qrCode"`
+	FileName  string `json:"fileName,omitempty"`
+	MediaType string `json:"mediaType,omitempty"`
+}
+
+func (s *Service) RenderProviderClientConfig(serverID, provider, kind, name string, arguments json.RawMessage) (*ProviderClientConfig, error) {
+	result, err := s.RunProviderResourceAction(serverID, provider, kind, name, "renderClientConfig", arguments)
+	if err != nil {
+		return nil, err
 	}
-	resources, listErr := s.localProviderResources(serverID)
-	if listErr != nil {
-		return result, listErr
+	if result.Type != models.ActionResultFile {
+		return nil, errors.New("renderClientConfig did not return a file")
 	}
-	for _, item := range resources {
-		if item.Kind == kind && item.Name == name {
-			return result, s.removeLegacyResource(serverID, item)
-		}
+	var text string
+	if err := json.Unmarshal(result.Data, &text); err != nil {
+		return nil, fmt.Errorf("decode client configuration: %w", err)
 	}
-	return result, nil
+	png, err := qrcode.Encode(text, qrcode.Medium, 384)
+	if err != nil {
+		return nil, fmt.Errorf("encode client configuration QR code: %w", err)
+	}
+	return &ProviderClientConfig{
+		Text: text, QRCode: base64.StdEncoding.EncodeToString(png), FileName: result.FileName, MediaType: result.MediaType,
+	}, nil
 }
 
 func (s *Service) withAgent(serverID string, operation func(context.Context, *agentclient.Client) error) error {

@@ -17,20 +17,16 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"uuid"
 
 	"github.com/ks-tool/vpn-admin/models"
-	"github.com/ks-tool/vpn-admin/storage"
 )
 
 func (s *Service) ListUsers() ([]models.User, error) {
 	debugOp("ListUsers").Msg("listing users")
-	users, err := s.store.Users().List()
-	if err != nil {
-		return nil, err
-	}
-	return sanitizeUsers(users), nil
+	return s.store.Users().List()
 }
 
 func (s *Service) GetUser(id string) (*models.User, error) {
@@ -43,8 +39,7 @@ func (s *Service) GetUser(id string) (*models.User, error) {
 	if err != nil {
 		return nil, err
 	}
-	sanitized := sanitizeUser(*u)
-	return &sanitized, nil
+	return u, nil
 }
 
 type UserInput struct {
@@ -62,8 +57,7 @@ func (s *Service) CreateUser(in UserInput) (*models.User, error) {
 	if err := s.store.Users().Set(u); err != nil {
 		return nil, err
 	}
-	sanitized := sanitizeUser(*u)
-	return &sanitized, nil
+	return u, nil
 }
 
 func (s *Service) UpdateUser(id string, in UserInput) (*models.User, error) {
@@ -83,25 +77,38 @@ func (s *Service) UpdateUser(id string, in UserInput) (*models.User, error) {
 	if err := s.store.Users().Set(u); err != nil {
 		return nil, err
 	}
-	sanitized := sanitizeUser(*u)
-	return &sanitized, nil
+	return u, nil
 }
 
-// DeleteUser removes the user and cascades peer removal from all interfaces.
+// DeleteUser revokes every Peer resource linked to the user, then deletes it.
 func (s *Service) DeleteUser(id string) error {
 	debugOp("DeleteUser").Str("user_id", id).Msg("deleting user")
 	uID, err := uuid.Parse(id)
 	if err != nil {
 		return err
 	}
-	user, err := s.store.Users().Get(uID)
+	if _, err := s.store.Users().Get(uID); err != nil {
+		return err
+	}
+	resources, err := s.allResources()
 	if err != nil {
 		return err
 	}
-	for index := range user.Peers {
-		peer := &user.Peers[index]
-		if _, err := s.deleteProviderPeer(uID, peer); err != nil && !storage.IsNotFound(err) {
-			return fmt.Errorf("delete provider peer %q: %w", peer.ResourceName, err)
+	for _, resource := range resources {
+		if resource.Kind != "Peer" {
+			continue
+		}
+		var spec struct {
+			UserRef string `json:"userRef"`
+		}
+		if err := json.Unmarshal(resource.Spec, &spec); err != nil {
+			return err
+		}
+		if spec.UserRef != id {
+			continue
+		}
+		if err := s.DeleteProviderResource(resource.ServerID, providerFromAPIVersion(resource.APIVersion), resource.Kind, resource.Name); err != nil {
+			return fmt.Errorf("delete peer %q: %w", resource.Name, err)
 		}
 	}
 	return s.store.Users().Delete(uID)

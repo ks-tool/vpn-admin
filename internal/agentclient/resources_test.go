@@ -31,13 +31,13 @@ func TestResourceClient(t *testing.T) {
 	resource := models.Resource{ID: "id", ServerID: "server", APIVersion: "test/v1", Kind: "Service", Name: "public", Generation: 1, Spec: spec}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
-		case "GET /v1/manifest":
+		case "GET /v2/manifest":
 			_ = json.NewEncoder(w).Encode(models.Manifest{ProtocolVersion: models.ProtocolVersion})
-		case "GET /v1/providers/test/schema":
+		case "GET /v2/providers/test/schema":
 			_ = json.NewEncoder(w).Encode(models.ProviderDefinition{Name: "test", Version: "1", Resources: []models.ResourceDefinition{{APIVersion: "test/v1", Kind: "Service", SpecSchema: json.RawMessage(`{"type":"object"}`), SchemaHash: "hash"}}})
-		case "GET /v1/providers/test/resources":
+		case "GET /v2/providers/test/resources":
 			_ = json.NewEncoder(w).Encode([]models.Resource{resource})
-		case "PUT /v1/providers/test/resources/Service/public":
+		case "PUT /v2/providers/test/resources/Service/public":
 			var desired models.Resource
 			if err := json.NewDecoder(r.Body).Decode(&desired); err != nil {
 				t.Error(err)
@@ -47,11 +47,11 @@ func TestResourceClient(t *testing.T) {
 			}
 			w.WriteHeader(http.StatusAccepted)
 			_ = json.NewEncoder(w).Encode(desired)
-		case "GET /v1/providers/test/resources/Service/public/status":
+		case "GET /v2/providers/test/resources/Service/public/status":
 			_ = json.NewEncoder(w).Encode(models.ResourceStatus{ObservedGeneration: 1, Phase: models.ResourceReady})
-		case "POST /v1/providers/test/resources/Service/public/actions/inspect":
+		case "POST /v2/providers/test/resources/Service/public/actions/inspect":
 			_ = json.NewEncoder(w).Encode(models.ActionResult{Type: models.ActionResultJSON, Data: json.RawMessage(`{"ok":true}`)})
-		case "DELETE /v1/providers/test/resources/Service/public":
+		case "DELETE /v2/providers/test/resources/Service/public":
 			w.WriteHeader(http.StatusAccepted)
 		default:
 			http.NotFound(w, r)
@@ -87,5 +87,31 @@ func TestResourceClient(t *testing.T) {
 	}
 	if err := client.DeleteResource(ctx, "test", "Service", "public"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAgentClientUsesV2ResourcePaths(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/manifest" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(models.Manifest{ProtocolVersion: "v2"})
+	}))
+	defer server.Close()
+	client := New(server.Client(), server.URL)
+	if _, err := client.Manifest(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManifestRequiresProtocolV2(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(models.Manifest{ProtocolVersion: "v1"})
+	}))
+	defer server.Close()
+	client := New(server.Client(), server.URL)
+	if _, err := client.Manifest(context.Background()); err == nil {
+		t.Fatal("agent v1 manifest was accepted")
 	}
 }

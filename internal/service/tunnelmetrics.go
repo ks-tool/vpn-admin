@@ -17,7 +17,9 @@
 package service
 
 import (
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"sort"
 	"sync"
 	"uuid"
@@ -56,14 +58,23 @@ func (s *Service) GetTunnelMetrics() ([]models.TunnelMetric, error) {
 	add := func(connectionID string, sourceID, targetID uuid.UUID) {
 		source, sourceOK := interfaces[sourceID]
 		target, targetOK := interfaces[targetID]
-		if !sourceOK || !targetOK || !source.Legacy || !target.Legacy || source.ServerID == target.ServerID {
+		if !sourceOK || !targetOK || source.ServerID == target.ServerID {
 			return
 		}
-		targetConfig, err := s.store.Servers().Interfaces(target.ServerID).Get(target.ID)
+		targetResource, err := s.store.Resources(target.ServerID).Get(target.ID.String())
 		if err != nil {
 			return
 		}
-		key := targetConfig.PrivateKey.PublicKey()
+		var providerStatus struct {
+			PublicKey string `json:"publicKey"`
+		}
+		if json.Unmarshal(targetResource.Status.Provider, &providerStatus) != nil {
+			return
+		}
+		key, err := base64.StdEncoding.DecodeString(providerStatus.PublicKey)
+		if err != nil {
+			return
+		}
 		sourceKey := source.ServerID.String() + "/" + source.ID.String()
 		group := sources[sourceKey]
 		if group == nil {
@@ -71,9 +82,6 @@ func (s *Service) GetTunnelMetrics() ([]models.TunnelMetric, error) {
 			sources[sourceKey] = group
 		}
 		group.targets = append(group.targets, tunnelMetricTarget{connectionID: connectionID, peerKey: hex.EncodeToString(key[:])})
-	}
-	for _, connection := range topology.Connections {
-		add(connection.ID.String(), connection.SourceID, connection.TargetID)
 	}
 	for _, link := range links {
 		sourceID, sourceErr := uuid.Parse(link.Source.ResourceID)

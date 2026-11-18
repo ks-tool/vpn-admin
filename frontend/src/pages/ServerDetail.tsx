@@ -14,283 +14,18 @@
   limitations under the License.
  */
 
-import * as React from 'react';
-import {useCallback, useEffect, useState} from 'react';
+import {useEffect, useState} from 'react';
 import {useTranslation} from 'react-i18next';
 import {toast} from 'sonner';
-import {
-    AlertTriangle,
-    CheckCircle2,
-    Edit2,
-    FileInput,
-    Network,
-    Plus,
-    RefreshCw,
-    Trash2,
-} from 'lucide-react';
 import {useAppStore} from '@/store';
-import {forceReplaceInterfacePeers, getInterfaceDefaults, updateInterfaceConfig} from '@/services/interfaces';
-import {listUnmanagedInterfaces, unlockServerSSH} from '@/services/servers';
+import {unlockServerSSH} from '@/services/servers';
 import {SSHPassphraseRequiredError} from '@/services/sshErrors';
 import {SSHPassphraseModal} from '@/components/server/SSHPassphraseModal';
-import {formatRelativeTime} from '@/lib/utils';
-import type {Interface, InterfaceConfig, UnmanagedInterface} from '@/types';
-import {FormField} from '@/components/common/FormField';
-import {Modal} from '@/components/common/Modal';
-import {buttons, inputs} from '@/components/common/controls';
-import {ConfirmModal} from '@/components/common/ConfirmModal';
-import {CollapsibleSection} from '@/components/common/CollapsibleSection';
 import {Container} from '@/components/common/Container';
-import {cn} from '@/lib/utils';
+import {ResourceManager} from '@/components/resources/ResourceManager';
 import {ServerFormFields} from '@/components/server/ServerFormFields';
-import {ImportInterfaceModal} from '@/components/server/ImportInterfaceModal';
-import {authTypeForServer, formDataToServerInput, serverToFormData, useServerForm} from '@/hooks/useServerForm';
-import type {AuthType} from '@/hooks/useServerForm';
-
-// ---------------------------------------------------------------------------
-// Interface form
-// ---------------------------------------------------------------------------
-
-const INITIAL_INTERFACE_FORM = {
-    iface: '',
-    addr: '',
-    // Default client DNS for this interface's peers (comma-separated string for
-    // input binding, converted to string[] on submit). Substituted into a
-    // peer's generated config when the peer itself doesn't set a DNS.
-    dns: '',
-    listen: '51820',
-    pk: '',
-    // Whether the interface is active on the agent (default on). Maps to the
-    // inverse of InterfaceConfig.disabled; the agent brings up only active
-    // interfaces and tears down inactive ones.
-    enabled: true,
-    // AmneziaWG obfuscation. `amnezia` toggles whether these are sent at all;
-    // when off the interface is plain WireGuard. The individual params are held
-    // as strings for input binding and converted on submit.
-    amnezia: true,
-    jc: '', jmin: '', jmax: '',
-    s1: '', s2: '', s3: '', s4: '',
-    h1: '', h2: '', h3: '', h4: '',
-    i1: '', i2: '', i3: '', i4: '', i5: '',
-};
-type InterfaceFormData = typeof INITIAL_INTERFACE_FORM;
-
-// The AmneziaWG param field names, split by value type, so the form and the
-// submit mapper stay in sync with a single source of truth.
-const AMNEZIA_NUM_FIELDS = ['jc', 'jmin', 'jmax', 's1', 's2', 's3', 's4'] as const;
-const AMNEZIA_STR_FIELDS = ['h1', 'h2', 'h3', 'h4', 'i1', 'i2', 'i3', 'i4', 'i5'] as const;
-
-// amneziaToForm projects an interface config's Amnezia params onto the form's
-// string fields (used both to seed the edit form and to apply generated
-// defaults on add). Missing/nil params become empty strings.
-function amneziaToForm(cfg: Partial<InterfaceConfig>) {
-    const s = (v: number | string | undefined | null) =>
-        v === undefined || v === null ? '' : String(v);
-    return {
-        jc: s(cfg.jc), jmin: s(cfg.jmin), jmax: s(cfg.jmax),
-        s1: s(cfg.s1), s2: s(cfg.s2), s3: s(cfg.s3), s4: s(cfg.s4),
-        h1: s(cfg.h1), h2: s(cfg.h2), h3: s(cfg.h3), h4: s(cfg.h4),
-        i1: s(cfg.i1), i2: s(cfg.i2), i3: s(cfg.i3), i4: s(cfg.i4), i5: s(cfg.i5),
-    };
-}
-
-function InterfaceFormModal({
-    title,
-    mode,
-    initialValues,
-    onSubmit,
-    onClose,
-    loading,
-    submitLabel,
-}: {
-    title: string;
-    mode: 'add' | 'edit';
-    initialValues: InterfaceFormData;
-    onSubmit: (data: InterfaceFormData) => Promise<void>;
-    onClose: () => void;
-    loading: boolean;
-    submitLabel: string;
-}) {
-    const {t} = useTranslation();
-    const [form, setForm] = useState(initialValues);
-
-    // On add, pre-fill the Amnezia tab with server-generated obfuscation params
-    // (kept identical to what CreateInterface would apply). Edit keeps whatever
-    // the existing interface already has (seeded via initialValues).
-    useEffect(() => {
-        if (mode !== 'add') return;
-        let cancelled = false;
-        (async () => {
-            const defaults = await getInterfaceDefaults();
-            if (cancelled || !defaults) return;
-            setForm(prev => ({...prev, ...amneziaToForm(defaults)}));
-        })();
-        return () => {
-            cancelled = true;
-        };
-    }, [mode]);
-
-    const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-        const {name, value, type} = e.target;
-        const val = type === 'checkbox' ? (e.target as HTMLInputElement).checked : value;
-        setForm(prev => ({...prev, [name]: val}));
-    };
-
-    const handleSubmit = async () => {
-        if (!form.iface.trim()) return toast.error(t('servers.interfaces.name') + ' ' + t('common.required'));
-        await onSubmit(form);
-    };
-
-    const amneziaNum = (name: (typeof AMNEZIA_NUM_FIELDS)[number]) => (
-        <FormField key={name} label={name.toUpperCase()}>
-            <input
-                type="number"
-                name={name}
-                value={form[name] as string}
-                onChange={handleChange}
-                disabled={loading || !form.amnezia}
-                className={inputs.primary}
-            />
-        </FormField>
-    );
-
-    const amneziaStr = (name: (typeof AMNEZIA_STR_FIELDS)[number]) => (
-        <FormField key={name} label={name.toUpperCase()}>
-            <input
-                type="text"
-                name={name}
-                value={form[name] as string}
-                onChange={handleChange}
-                disabled={loading || !form.amnezia}
-                className={cn(inputs.primary, 'font-mono text-xs')}
-            />
-        </FormField>
-    );
-
-    const sectionTitle = 'mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground dark:text-zinc-500';
-
-    return (
-        <Modal title={title} onClose={onClose} loading={loading}>
-            <div className="space-y-4">
-                <FormField label={t('servers.interfaces.name')}>
-                    <input type="text" name="iface" value={form.iface} onChange={handleChange}
-                           placeholder="wg0" disabled={loading} className={inputs.primary}/>
-                </FormField>
-
-                <CollapsibleSection label={t('common.advancedSettings')} defaultOpen={mode === 'edit'}>
-                    <FormField label={t('servers.interfaces.addr')}>
-                        <div>
-                            <input type="text" name="addr" value={form.addr} onChange={handleChange}
-                                   placeholder="10.0.0.1/24" disabled={loading} className={inputs.primary}/>
-                            <p className="mt-1 text-xs text-muted-foreground">{t('servers.interfaces.addrHint')}</p>
-                        </div>
-                    </FormField>
-
-                    <FormField label={t('servers.interfaces.dns')}>
-                        <div>
-                            <input type="text" name="dns" value={form.dns} onChange={handleChange}
-                                   placeholder="1.1.1.1, 8.8.8.8" disabled={loading} className={inputs.primary}/>
-                            <p className="mt-1 text-xs text-muted-foreground">{t('servers.interfaces.dnsHint')}</p>
-                        </div>
-                    </FormField>
-
-                    <FormField label={t('servers.interfaces.port')}>
-                        <input type="number" name="listen" value={form.listen} onChange={handleChange}
-                               min="1" max="65535" disabled={loading} className={inputs.primary}/>
-                    </FormField>
-
-                    <FormField label={t('servers.interfaces.privateKey')}>
-                        <input
-                            type="text"
-                            name="pk"
-                            value={form.pk}
-                            onChange={handleChange}
-                            placeholder={t('servers.interfaces.privateKeyPlaceholder')} disabled={loading}
-                            className={cn(inputs.primary, 'resize-none font-mono text-xs')}
-                        />
-                    </FormField>
-
-                    <FormField label="">
-                        <label className="flex items-center cursor-pointer">
-                            <input
-                                type="checkbox"
-                                name="enabled"
-                                checked={form.enabled}
-                                onChange={handleChange}
-                                disabled={loading}
-                                className="rounded border-input bg-background text-sky-500 focus:ring-sky-500 focus:ring-offset-0 disabled:opacity-50 dark:border-white/10 dark:bg-white/5"
-                            />
-                            <span className="ml-3 text-sm font-medium text-foreground dark:text-zinc-300">
-                                {t('servers.interfaces.enabled')}
-                            </span>
-                        </label>
-                    </FormField>
-                    <p className="text-xs text-muted-foreground">{t('servers.interfaces.enabledHint')}</p>
-
-                    <FormField label="">
-                        <label className="flex items-center cursor-pointer">
-                            <input
-                                type="checkbox"
-                                name="amnezia"
-                                checked={form.amnezia}
-                                onChange={handleChange}
-                                disabled={loading}
-                                className="rounded border-input bg-background text-sky-500 focus:ring-sky-500 focus:ring-offset-0 disabled:opacity-50 dark:border-white/10 dark:bg-white/5"
-                            />
-                            <span className="ml-3 text-sm font-medium text-foreground dark:text-zinc-300">
-                                {t('servers.interfaces.amneziaInterface')}
-                            </span>
-                        </label>
-                    </FormField>
-                    <p className="text-xs text-muted-foreground">{t('servers.interfaces.amneziaHint')}</p>
-
-                    <div>
-                        <h4 className={sectionTitle}>{t('servers.interfaces.junkPackets')}</h4>
-                        <div className="space-y-3">
-                            {AMNEZIA_NUM_FIELDS.slice(0, 3).map(amneziaNum)}
-                        </div>
-                    </div>
-
-                    <div>
-                        <h4 className={sectionTitle}>{t('servers.interfaces.packetPadding')}</h4>
-                        <div className="space-y-3">
-                            {AMNEZIA_NUM_FIELDS.slice(3).map(amneziaNum)}
-                        </div>
-                    </div>
-
-                    <div>
-                        <h4 className={sectionTitle}>{t('servers.interfaces.magicHeaders')}</h4>
-                        <div className="space-y-3">
-                            {AMNEZIA_STR_FIELDS.slice(0, 4).map(amneziaStr)}
-                        </div>
-                    </div>
-
-                    <div>
-                        <h4 className={sectionTitle}>{t('servers.interfaces.signatures')}</h4>
-                        <div className="space-y-3">
-                            {AMNEZIA_STR_FIELDS.slice(4).map(amneziaStr)}
-                        </div>
-                    </div>
-                </CollapsibleSection>
-
-                <div className="flex gap-3 pt-4">
-                    <button onClick={handleSubmit} disabled={loading || !form.iface.trim()}
-                            className={cn('flex-1', buttons.primary)}>
-                        {loading ? `${t('common.saving')}...` : submitLabel}
-                    </button>
-                    <button onClick={onClose} disabled={loading}
-                            className={cn('flex-1', buttons.secondary)}>
-                        {t('common.cancel')}
-                    </button>
-                </div>
-            </div>
-        </Modal>
-    );
-}
-
-// ---------------------------------------------------------------------------
-// ServerDetail
-// ---------------------------------------------------------------------------
+import {buttons} from '@/components/common/controls';
+import {authTypeForServer, formDataToServerInput, serverToFormData, useServerForm, type AuthType} from '@/hooks/useServerForm';
 
 interface ServerDetailProps {
     serverId: string;
@@ -300,143 +35,61 @@ interface ServerDetailProps {
 
 export default function ServerDetail({serverId, section, onChanged}: ServerDetailProps) {
     const {t} = useTranslation();
-    const {
-        servers,
-        users,
-        updateServer,
-        createInterface,
-        deleteInterface,
-        listInterfacesForServer,
-        refreshData,
-    } = useAppStore();
-
+    const {servers, updateServer, refreshData} = useAppStore();
     const [isLoading, setIsLoading] = useState(false);
-    // Initialized to 'key' but corrected from the loaded server in the effect
-    // below (server isn't in scope yet here) so the edit form opens on the tab
-    // the server actually uses.
     const [authType, setAuthType] = useState<AuthType>('key');
-    const [serverInterfaces, setServerInterfaces] = useState<Interface[]>([]);
-    // Live interfaces on the server the agent doesn't manage (wg-quick ones),
-    // listed read-only with an Import action. Best-effort: [] when the agent
-    // can't be asked.
-    const [unmanaged, setUnmanaged] = useState<UnmanagedInterface[]>([]);
-    const [importTarget, setImportTarget] = useState<string | null>(null);
-    const [sshUnlock, setSshUnlock] = useState<{retry: () => void} | null>(null);
-    const [deleteInterfaceId, setDeleteInterfaceId] = useState<string | null>(null);
-    const [forceReplaceInterfaceId, setForceReplaceInterfaceId] = useState<string | null>(null);
-    // Second-stage flag: an interface that has peers requires confirming twice
-    // (the cascade deletes all of them), so this tracks that the first warning
-    // was acknowledged.
-    const [deleteInterfaceConfirmed, setDeleteInterfaceConfirmed] = useState(false);
-    const [deleteInterfaceLoading, setDeleteInterfaceLoading] = useState(false);
-    const [forceReplacePeersLoading, setForceReplacePeersLoading] = useState(false);
+    const [sshUnlock, setSshUnlock] = useState(false);
     const [unlockLoading, setUnlockLoading] = useState(false);
     const [unlockError, setUnlockError] = useState<string | undefined>();
-    const [interfaceModal, setInterfaceModal] = useState<{
-        mode: 'add' | 'edit';
-        initialValues: InterfaceFormData;
-        interfaceId?: string;
-    } | null>(null);
-
-    const server = servers.find(s => s.id === serverId);
-    const {formData, updateField, resetForm} = useServerForm(
-        server ? serverToFormData(server) : undefined,
-    );
-
-    const loadInterfaces = useCallback(async () => {
-        if (!serverId) return;
-        const [list, unmanagedList] = await Promise.all([
-            listInterfacesForServer(serverId),
-            listUnmanagedInterfaces(serverId),
-        ]);
-        if (list) setServerInterfaces(list);
-        setUnmanaged(unmanagedList ?? []);
-    }, [serverId, listInterfacesForServer]);
+    const server = servers.find(item => item.id === serverId);
+    const {formData, updateField, resetForm} = useServerForm(server ? serverToFormData(server) : undefined);
 
     useEffect(() => {
         if (!server) return;
         const timeout = window.setTimeout(() => {
             resetForm(serverToFormData(server));
             setAuthType(authTypeForServer(server));
-            void loadInterfaces();
         }, 0);
         return () => window.clearTimeout(timeout);
-    }, [server, loadInterfaces, resetForm]);
+    }, [server, resetForm]);
 
-    const handleForceReplacePeers = async () => {
-        if (!serverId || !forceReplaceInterfaceId) return;
-        setForceReplacePeersLoading(true);
-        try {
-            const ok = await forceReplaceInterfacePeers(serverId, forceReplaceInterfaceId);
-            if (!ok) {
-                toast.error(t('servers.interfaces.forceReplacePeersError'));
-                return;
-            }
-            toast.success(t('servers.interfaces.forceReplacePeersSuccess'));
-            await loadInterfaces();
-            onChanged();
-            setForceReplaceInterfaceId(null);
-        } finally {
-            setForceReplacePeersLoading(false);
-        }
-    };
-
-    // ---- Server handlers ----------------------------------------------------
+    if (!server) return <div className="p-8 text-center text-muted-foreground">{t('servers.noServers')}</div>;
 
     const handleSave = async () => {
         if (!formData.name.trim()) {
-            return toast.error(t('servers.nameRequired'));
+            toast.error(t('servers.nameRequired'));
+            return;
         }
         setIsLoading(true);
         try {
-            const updated = await updateServer(
-                serverId,
-                formDataToServerInput(formData, authType, server),
-            );
-            if (updated) {
-                toast.success(t('servers.serverUpdated'));
-                await refreshData();
-                onChanged();
-            } else {
+            const updated = await updateServer(serverId, formDataToServerInput(formData, authType, server));
+            if (!updated) {
                 toast.error(t('servers.updateServerError'));
-            }
-        } catch (err) {
-            if (err instanceof SSHPassphraseRequiredError) {
-                // The server record itself was already saved by the backend
-                // before the dial attempt failed — only the live tunnel is
-                // pending, so on success we just refresh and finish editing.
-                setSshUnlock({
-                    retry: () => {
-                        toast.success(t('servers.serverUpdated'));
-                        void refreshData().then(onChanged);
-                    },
-                });
                 return;
             }
-            console.error('Failed to update server:', err);
-            toast.error(t('servers.updateServerError'));
+            toast.success(t('servers.serverUpdated'));
+            await refreshData();
+            onChanged();
+        } catch (error) {
+            if (error instanceof SSHPassphraseRequiredError) {
+                setSshUnlock(true);
+                return;
+            }
+            toast.error(error instanceof Error ? error.message : t('servers.updateServerError'));
         } finally {
             setIsLoading(false);
         }
     };
 
-    const handleCancel = () => {
-        if (server) {
-            resetForm(serverToFormData(server));
-            setAuthType(authTypeForServer(server));
-        }
-    };
-
-    const handleUnlockSubmit = async (passphrase: string, applyToAll: boolean) => {
-        if (!serverId || !sshUnlock) return;
+    const handleUnlock = async (passphrase: string, applyToAll: boolean) => {
         setUnlockLoading(true);
         setUnlockError(undefined);
         try {
-            const ok = await unlockServerSSH(serverId, passphrase, applyToAll);
-            if (ok) {
-                const {retry} = sshUnlock;
-                setSshUnlock(null);
-                retry();
+            if (await unlockServerSSH(serverId, passphrase, applyToAll)) {
+                setSshUnlock(false);
+                toast.success(t('servers.serverUpdated'));
+                await refreshData();
+                onChanged();
             } else {
                 setUnlockError(t('auth.unlockError'));
             }
@@ -445,92 +98,11 @@ export default function ServerDetail({serverId, section, onChanged}: ServerDetai
         }
     };
 
-    // ---- Interface handlers -------------------------------------------------
-
-    const handleDeleteInterface = async () => {
-        if (!serverId || !deleteInterfaceId) return;
-        setDeleteInterfaceLoading(true);
-        try {
-            const ok = await deleteInterface(serverId, deleteInterfaceId);
-            if (ok) {
-                toast.success(t('servers.interfaces.deleted'));
-                await loadInterfaces();
-                onChanged();
-            } else {
-                toast.error(t('servers.interfaces.deleteError'));
-            }
-        } catch (err) {
-            console.error('Failed to delete interface:', err);
-            toast.error(t('servers.interfaces.deleteError'));
-        } finally {
-            setDeleteInterfaceLoading(false);
-            setDeleteInterfaceId(null);
-            setDeleteInterfaceConfirmed(false);
-        }
-    };
-
-    const handleInterfaceSubmit = async (form: InterfaceFormData) => {
-        const config: InterfaceConfig = {
-            iface: form.iface,
-            addr: form.addr,
-            dns: form.dns.split(',').map(s => s.trim()).filter(Boolean),
-            listen: parseInt(form.listen) || 51820,
-            pk: form.pk,
-            disabled: !form.enabled,
-        };
-
-        // Only carry the AmneziaWG obfuscation params when the interface is an
-        // Amnezia one; otherwise they're omitted, so the backend stores a plain
-        // WireGuard interface (and, on edit, strips any previously-set params).
-        if (form.amnezia) {
-            const num = (v: string) => {
-                const n = parseInt(v, 10);
-                return Number.isFinite(n) ? n : undefined;
-            };
-            const str = (v: string) => {
-                const trimmed = v.trim();
-                return trimmed === '' ? undefined : trimmed;
-            };
-            for (const f of AMNEZIA_NUM_FIELDS) config[f] = num(form[f]);
-            for (const f of AMNEZIA_STR_FIELDS) config[f] = str(form[f]);
-        }
-
-        const isAdd = interfaceModal?.mode === 'add';
-        try {
-            if (isAdd && serverId) {
-                await createInterface(serverId, config);
-            } else if (interfaceModal?.mode === 'edit' && interfaceModal.interfaceId) {
-                await updateInterfaceConfig(serverId!, interfaceModal.interfaceId, config);
-            } else {
-                return;
-            }
-            toast.success(isAdd ? t('servers.interfaces.added') : t('servers.interfaces.updated'));
-            setInterfaceModal(null);
-            await loadInterfaces();
-            onChanged();
-        } catch (err) {
-            // Surface the specific backend reason (e.g. a name/port/subnet
-            // conflict) instead of a generic failure.
-            const fallback = isAdd ? t('servers.interfaces.addError') : t('servers.interfaces.updateError');
-            toast.error(err instanceof Error && err.message ? err.message : fallback);
-        }
-    };
-
-    // ---- Render: not found --------------------------------------------------
-
-    if (!server) {
-        return <div className="p-8 text-center text-muted-foreground">{t('servers.noServers')}</div>;
-    }
-
-    // ---- Render: main -------------------------------------------------------
-
     return (
         <div>
-            <div className="space-y-6">
-                {/* Server information */}
-                {section === 'information' && (
+            {section === 'information' ? (
                 <Container title={t('servers.information')}>
-                    <form onSubmit={e => e.preventDefault()}>
+                    <form onSubmit={event => event.preventDefault()}>
                         <ServerFormFields
                             formData={formData}
                             onChange={updateField}
@@ -540,7 +112,7 @@ export default function ServerDetail({serverId, section, onChanged}: ServerDetai
                             onAuthTypeChange={setAuthType}
                             serverId={server.id}
                             hasStoredKey={Boolean(server.ssh.keyData)}
-                            hasTLSCertificates={!!server.agent.tls?.ca?.cert}
+                            hasTLSCertificates={Boolean(server.agent.tls?.ca?.cert)}
                             onCertificatesGenerated={async () => {
                                 toast.success(t('servers.certificatesGenerated'));
                                 await refreshData();
@@ -548,261 +120,18 @@ export default function ServerDetail({serverId, section, onChanged}: ServerDetai
                             }}
                         />
                         <div className="flex gap-3 pt-6">
-                            <button type="button" onClick={handleSave} disabled={isLoading}
-                                    className={buttons.primary}>
+                            <button type="button" onClick={() => void handleSave()} disabled={isLoading} className={buttons.primary}>
                                 {isLoading ? `${t('common.saving')}...` : t('common.save')}
                             </button>
-                            <button type="button" onClick={handleCancel} disabled={isLoading}
-                                    className={buttons.secondary}>
-                                {t('common.cancel')}
-                            </button>
+                            <button type="button" onClick={() => {
+                                resetForm(serverToFormData(server));
+                                setAuthType(authTypeForServer(server));
+                            }} disabled={isLoading} className={buttons.secondary}>{t('common.cancel')}</button>
                         </div>
                     </form>
                 </Container>
-                )}
-
-                {/* Interfaces */}
-                {section !== 'information' && (
-                <div className="rounded-xl border border-border bg-card p-6 dark:border-white/5 dark:bg-white/3">
-                    <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-lg font-semibold text-foreground dark:text-zinc-100 flex items-center gap-2">
-                            <Network size={20}/>
-                            {t('servers.interface')} ({serverInterfaces.length})
-                        </h2>
-                        <button
-                            onClick={() => setInterfaceModal({mode: 'add', initialValues: INITIAL_INTERFACE_FORM})}
-                            className={buttons.primary}
-                            title={t('servers.addInterfaceTooltip')}
-                        >
-                            <Plus size={14}/>
-                        </button>
-                    </div>
-
-                    {serverInterfaces.length > 0 || unmanaged.length > 0 ? (
-                        <div className="space-y-3">
-                            {serverInterfaces.map(iface => (
-                                <div
-                                    key={iface.id ?? iface.iface}
-                                    className="rounded-lg border border-input bg-background p-4 dark:border-white/10 dark:bg-white/5"
-                                >
-                                    <div className="flex items-center justify-between mb-3">
-                                        {iface.iface && (
-                                            <div className="text-sm font-semibold text-foreground dark:text-zinc-100 flex items-center gap-2">
-                                                <Network size={16}/>
-                                                {iface.iface}
-                                                {iface.inSync ? (
-                                                    <span
-                                                        className="text-emerald-600 dark:text-emerald-400"
-                                                        title={iface.lastSyncedAt
-                                                            ? t('servers.interfaces.syncedAt', {time: formatRelativeTime(iface.lastSyncedAt)})
-                                                            : t('servers.interfaces.synced')}
-                                                    >
-                                                        <CheckCircle2 size={14}/>
-                                                    </span>
-                                                ) : (
-                                                    <span
-                                                        className="text-amber-600 dark:text-amber-400"
-                                                        title={iface.lastSyncError || t('servers.interfaces.notSynced')}
-                                                    >
-                                                        <AlertTriangle size={14}/>
-                                                    </span>
-                                                )}
-                                                {iface.disabled && (
-                                                    <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground dark:bg-white/10 dark:text-zinc-400">
-                                                        {t('servers.interfaces.disabledBadge')}
-                                                    </span>
-                                                )}
-                                            </div>
-                                        )}
-                                        {iface.id && (
-                                            <div className="flex gap-2">
-                                                {!iface.disabled && (
-                                                    <button
-                                                        onClick={() => setForceReplaceInterfaceId(iface.id)}
-                                                        className="p-1 text-muted-foreground hover:text-amber-600 dark:hover:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-500/10 rounded transition-colors"
-                                                        title={t('servers.interfaces.forceReplacePeers')}
-                                                        aria-label={t('servers.interfaces.forceReplacePeers')}
-                                                    >
-                                                        <RefreshCw size={16}/>
-                                                    </button>
-                                                )}
-                                                <button
-                                                    onClick={() => setInterfaceModal({
-                                                        mode: 'edit',
-                                                        initialValues: {
-                                                            iface: iface.iface ?? '',
-                                                            addr: iface.addr ?? '',
-                                                            dns: (iface.dns ?? []).join(', '),
-                                                            listen: String(iface.listen ?? 51820),
-                                                            pk: iface.pk ?? '',
-                                                            enabled: iface.disabled !== true,
-                                                            amnezia: iface.jc != null || iface.jmin != null || iface.jmax != null,
-                                                            ...amneziaToForm(iface),
-                                                        },
-                                                        interfaceId: iface.id,
-                                                    })}
-                                                    disabled={!!iface.tunnel}
-                                                    className="p-1 text-muted-foreground hover:text-sky-600 dark:hover:text-sky-400 hover:bg-sky-100 dark:hover:bg-sky-500/10 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-                                                    title={iface.tunnel ? t('servers.interfaces.inTunnelTooltip') : t('servers.interfaces.editTooltip')}
-                                                >
-                                                    <Edit2 size={16}/>
-                                                </button>
-                                                <button
-                                                    onClick={() => { setDeleteInterfaceConfirmed(false); setDeleteInterfaceId(iface.id); }}
-                                                    disabled={!!iface.tunnel}
-                                                    className="p-1 text-muted-foreground hover:text-red-600 dark:hover:text-red-400 hover:bg-red-100 dark:hover:bg-red-500/10 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-                                                    title={iface.tunnel ? t('servers.interfaces.inTunnelTooltip') : t('servers.interfaces.deleteTooltip')}
-                                                >
-                                                    <Trash2 size={16}/>
-                                                </button>
-                                            </div>
-                                        )}
-                                    </div>
-                                    {iface.addr && (
-                                        <div className="text-xs text-muted-foreground dark:text-zinc-500 mb-2">
-                                            {t('servers.interfaces.addressLabel')}: <span className="font-mono text-foreground dark:text-zinc-300">{iface.addr}</span>
-                                        </div>
-                                    )}
-                                    {iface.listen && (
-                                        <div className="text-xs text-muted-foreground dark:text-zinc-500">
-                                            {t('servers.interfaces.listenPortLabel')}: <span className="font-mono text-foreground dark:text-zinc-300">{iface.listen}</span>
-                                        </div>
-                                    )}
-                                </div>
-                            ))}
-                            {/* Unmanaged (wg-quick) interfaces: read-only, no edit/delete/peers —
-                                the only action is taking them over via the import. */}
-                            {unmanaged.map(u => (
-                                <div
-                                    key={`unmanaged-${u.name}`}
-                                    className="rounded-lg border border-dashed border-amber-300/70 bg-background p-4 dark:border-amber-500/30 dark:bg-white/5"
-                                    title={t('servers.import.notManagedTooltip')}
-                                >
-                                    <div className="flex items-center justify-between">
-                                        <div className="text-sm font-semibold text-foreground dark:text-zinc-100 flex items-center gap-2">
-                                            <Network size={16}/>
-                                            {u.name}
-                                            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-400">
-                                                {t('servers.import.notManagedBadge')}
-                                            </span>
-                                            <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-mono font-medium text-muted-foreground dark:bg-white/10 dark:text-zinc-400">
-                                                {u.kind}
-                                            </span>
-                                        </div>
-                                        <button
-                                            onClick={() => setImportTarget(u.name)}
-                                            className={cn(buttons.secondary, 'inline-flex items-center gap-1.5 px-3 py-1')}
-                                            title={t('servers.import.rowHint')}
-                                        >
-                                            <FileInput size={14}/>
-                                            {t('servers.import.button')}
-                                        </button>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    ) : (
-                        <div className="text-center text-muted-foreground dark:text-zinc-500 py-4">
-                            {t('servers.interfaces.noInterfaces')}
-                        </div>
-                    )}
-                </div>
-                )}
-            </div>
-
-            {interfaceModal && (
-                <InterfaceFormModal
-                    key={`${interfaceModal.mode}:${interfaceModal.interfaceId ?? 'new'}`}
-                    title={interfaceModal.mode === 'add'
-                        ? t('servers.interfaces.addTitle')
-                        : t('servers.interfaces.editTitle')}
-                    mode={interfaceModal.mode}
-                    initialValues={interfaceModal.initialValues}
-                    onSubmit={handleInterfaceSubmit}
-                    onClose={() => setInterfaceModal(null)}
-                    loading={false}
-                    submitLabel={interfaceModal.mode === 'add' ? t('servers.interfaces.addTitle') : t('common.save')}
-                />
-            )}
-
-            {importTarget !== null && (
-                <ImportInterfaceModal
-                    serverId={server.id}
-                    initialInterface={importTarget}
-                    unmanaged={unmanaged}
-                    onClose={() => setImportTarget(null)}
-                    onImported={() => { void refreshData(); void loadInterfaces(); onChanged(); }}
-                />
-            )}
-
-            {sshUnlock && (
-                <SSHPassphraseModal
-                    onSubmit={handleUnlockSubmit}
-                    onClose={() => setSshUnlock(null)}
-                    loading={unlockLoading}
-                    error={unlockError}
-                />
-            )}
-
-            {deleteInterfaceId && (() => {
-                const iface = serverInterfaces.find((i) => i.id === deleteInterfaceId);
-                // Count from the reactive store's users (peers live under users,
-                // tagged with their interface id — the same thing the backend
-                // cascade-deletes), so a peer added on the Users page is seen
-                // even though serverInterfaces was loaded on mount. iface.peers is
-                // a fallback for when the users list hasn't loaded yet.
-                const usersPeerCount = users.reduce(
-                    (n, u) => n + (u.peers?.filter((p) => p.interface === deleteInterfaceId).length ?? 0),
-                    0,
-                );
-                const peerCount = Math.max(usersPeerCount, iface?.peers?.length ?? 0);
-                const closeDelete = () => {
-                    setDeleteInterfaceId(null);
-                    setDeleteInterfaceConfirmed(false);
-                };
-                // An interface with peers needs a double confirmation: the first
-                // dialog spells out that all its peers will be deleted too, the
-                // second is the final go-ahead. No peers → a single confirmation.
-                if (peerCount > 0 && !deleteInterfaceConfirmed) {
-                    return (
-                        <ConfirmModal
-                            title={t('servers.interfaces.deleteTooltip')}
-                            message={t('servers.interfaces.confirmDeleteWithPeers', {
-                                count: peerCount,
-                                name: iface?.iface ?? '',
-                            })}
-                            confirmLabel={t('common.continue')}
-                            onConfirm={() => setDeleteInterfaceConfirmed(true)}
-                            onCancel={closeDelete}
-                        />
-                    );
-                }
-                return (
-                    <ConfirmModal
-                        title={t('servers.interfaces.deleteTooltip')}
-                        message={peerCount > 0
-                            ? t('servers.interfaces.confirmDeleteWithPeersFinal', {count: peerCount})
-                            : t('servers.interfaces.confirmDelete')}
-                        onConfirm={handleDeleteInterface}
-                        onCancel={closeDelete}
-                        loading={deleteInterfaceLoading}
-                    />
-                );
-            })()}
-
-            {forceReplaceInterfaceId && (() => {
-                const iface = serverInterfaces.find((i) => i.id === forceReplaceInterfaceId);
-                return (
-                    <ConfirmModal
-                        title={t('servers.interfaces.forceReplacePeers')}
-                        message={t('servers.interfaces.confirmForceReplacePeers', {name: iface?.iface ?? ''})}
-                        confirmLabel={t('servers.interfaces.forceReplacePeers')}
-                        onConfirm={handleForceReplacePeers}
-                        onCancel={() => setForceReplaceInterfaceId(null)}
-                        loading={forceReplacePeersLoading}
-                    />
-                );
-            })()}
+            ) : <ResourceManager serverId={serverId} onChanged={onChanged} />}
+            {sshUnlock && <SSHPassphraseModal onSubmit={handleUnlock} onClose={() => setSshUnlock(false)} loading={unlockLoading} error={unlockError} />}
         </div>
     );
 }

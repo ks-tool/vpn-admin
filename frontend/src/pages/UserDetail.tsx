@@ -14,457 +14,38 @@
   limitations under the License.
  */
 
-import * as React from 'react';
 import {useEffect, useState} from 'react';
 import {useTranslation} from 'react-i18next';
 import {toast} from 'sonner';
-import {ArrowLeft, ArrowRightLeft, Download, FileDown, Key, Plus, Power, PowerOff, QrCode, Trash2, UserPen} from 'lucide-react';
+import {ArrowLeft, Trash2, UserPen} from 'lucide-react';
 import {useNavigation} from '@/contexts/NavigationContext';
 import {useAppStore} from '@/store';
-import {listInterfaces} from '@/services/interfaces';
-import {getProviderSchema} from '@/services/resources';
-import {SchemaForm} from '@/components/topology/SchemaForm';
-import {getPeerConfig, getPeerQRCode, migratePeer, savePeerConfig, savePeerQRCode, setPeerDisabled} from '@/services/peers';
-import {CopyButton} from '@/components/common/CopyButton';
 import {StatusBadge} from '@/components/common/StatusBadge';
 import {Container} from '@/components/common/Container';
 import {FormField} from '@/components/common/FormField';
-import {Modal} from '@/components/common/Modal';
+import {UserPeerManager} from '@/components/resources/UserPeerManager';
 import {buttons, inputs} from '@/components/common/controls';
 import {ConfirmModal} from '@/components/common/ConfirmModal';
-import {CollapsibleSection} from '@/components/common/CollapsibleSection';
 import {cn} from '@/lib/utils';
-import type {Interface, ProviderDefinition, Server} from '@/types';
-
-// ---------------------------------------------------------------------------
-// Peer QR code modal
-// ---------------------------------------------------------------------------
-
-function PeerQRModal({userId, publicKey, peerName, onClose}: {
-    userId: string;
-    publicKey: string;
-    peerName: string;
-    onClose: () => void;
-}) {
-    const {t} = useTranslation();
-    const [config, setConfig] = useState('');
-    const [qrDataUrl, setQrDataUrl] = useState('');
-    const [loading, setLoading] = useState(true);
-
-    // The QR image is rendered server-side (Service.GetPeerQRCode) from the
-    // same config text fetched here for the "copy as text" box below — the
-    // config (which embeds the peer's private key) never needs to be
-    // handed to a client-side QR library, it only has to render the pixels
-    // it already produced for the other use.
-    useEffect(() => {
-        let cancelled = false;
-        (async () => {
-            const [cfg, qrBase64] = await Promise.all([
-                getPeerConfig(userId, publicKey),
-                getPeerQRCode(userId, publicKey),
-            ]);
-            if (cancelled) return;
-            if (!cfg || !qrBase64) {
-                toast.error(t('peers.generateConfigError'));
-                setLoading(false);
-                return;
-            }
-            setConfig(cfg);
-            setQrDataUrl(`data:image/png;base64,${qrBase64}`);
-            setLoading(false);
-        })();
-        return () => {
-            cancelled = true;
-        };
-    }, [userId, publicKey, t]);
-
-    // Strip only characters that are actually illegal in filenames (keep
-    // Unicode letters, e.g. Cyrillic peer names, intact), then trim stray
-    // separators so the result is never empty.
-    const safeName = (peerName || 'peer')
-        .replace(/[/\\:*?"<>|]+/g, '_')
-        .split('')
-        .filter(character => {
-            const code = character.charCodeAt(0);
-            return code > 31 && code !== 127;
-        })
-        .join('')
-        .replace(/^[.\s]+|[.\s]+$/g, '') || 'peer';
-
-    // Save the (already-rendered, server-produced) PNG to a file. The browser
-    // and the Wails desktop webview need different mechanisms — savePeerQRCode
-    // picks the right one (native save dialog on desktop, anchor download in a
-    // plain browser); see its doc comment.
-    const handleDownload = async () => {
-        if (!qrDataUrl) return;
-        const saved = await savePeerQRCode(userId, publicKey, safeName, qrDataUrl);
-        if (saved) {
-            toast.success(t('peers.qrCodeSaved'));
-        }
-    };
-
-    // Save the same config the QR encodes as a ready-to-import .conf file
-    // (savePeerConfig picks the transport, like savePeerQRCode above). The
-    // filename stem is capped at 15 characters because WireGuard clients
-    // derive the tunnel name from it, and Linux interface names are limited
-    // to 15 characters — a longer stem makes `wg-quick up ./file.conf` fail.
-    const handleSaveConfig = async () => {
-        if (!config) return;
-        const saved = await savePeerConfig(userId, publicKey, safeName.slice(0, 15), config);
-        if (saved) {
-            toast.success(t('peers.configSaved'));
-        }
-    };
-
-    return (
-        <Modal title={t('peers.qrCodeTitle', {name: peerName})} onClose={onClose}>
-            <div className="flex flex-col items-center gap-4">
-                {loading ? (
-                    <div className="py-12 text-sm text-muted-foreground dark:text-zinc-500">{t('common.generating')}</div>
-                ) : qrDataUrl ? (
-                    <>
-                        <img src={qrDataUrl} alt="WireGuard peer QR code" className="rounded-lg bg-white p-2"/>
-                        <div className="flex items-center gap-2 w-full">
-                            <textarea
-                                readOnly
-                                value={config}
-                                rows={6}
-                                className={cn(inputs.primary, 'resize-none font-mono text-xs')}
-                            />
-                            <CopyButton value={config}/>
-                        </div>
-                        <button
-                            onClick={handleDownload}
-                            className={cn('w-full inline-flex items-center justify-center gap-2', buttons.primary)}
-                        >
-                            <Download size={16}/>
-                            {t('peers.downloadQrCode')}
-                        </button>
-                        <button
-                            onClick={handleSaveConfig}
-                            className={cn('w-full inline-flex items-center justify-center gap-2', buttons.secondary)}
-                        >
-                            <FileDown size={16}/>
-                            {t('peers.saveConfig')}
-                        </button>
-                    </>
-                ) : (
-                    <div className="py-12 text-sm text-red-500">{t('peers.configGenerateFailed')}</div>
-                )}
-                <button onClick={onClose} className={cn('w-full', buttons.secondary)}>
-                    {t('common.close')}
-                </button>
-            </div>
-        </Modal>
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Add Peer modal (mirrors ServerDetail's InterfaceFormModal)
-// ---------------------------------------------------------------------------
-
-const INITIAL_PEER_FORM = {
-    name: '',
-    serverId: '',
-    interfaceId: '',
-    spec: {} as Record<string, unknown>,
-    allowedIps: '',
-    endpoint: '',
-    dns: '',
-    privateKey: '',
-    presharedKey: '',
-    withPresharedKey: true,
-};
-type PeerFormData = typeof INITIAL_PEER_FORM;
-
-function AddPeerModal({
-    servers,
-    onSubmit,
-    onClose,
-    loading,
-}: {
-    servers: Server[];
-    onSubmit: (data: PeerFormData) => Promise<void>;
-    onClose: () => void;
-    loading: boolean;
-}) {
-    const {t} = useTranslation();
-    const [form, setForm] = useState<PeerFormData>(INITIAL_PEER_FORM);
-    const [interfaces, setInterfaces] = useState<Array<{ id: string; name: string; addr: string; provider?: string }>>([]);
-    const [providerDefinition, setProviderDefinition] = useState<ProviderDefinition | null>(null);
-    const selectedInterface = interfaces.find(iface => iface.id === form.interfaceId);
-    const isProviderPeer = !!selectedInterface?.provider && selectedInterface.provider !== 'awg';
-
-    useEffect(() => {
-        let cancelled = false;
-        if (!form.serverId) {
-            void Promise.resolve().then(() => {
-                if (!cancelled) setInterfaces([]);
-            });
-            return () => {cancelled = true;};
-        }
-        (async () => {
-            const list = await listInterfaces(form.serverId);
-            if (!cancelled) {
-                setInterfaces(
-                    list ? list.map(iface => ({id: iface.id, name: iface.iface, addr: iface.addr || '', provider: iface.provider})) : [],
-                );
-            }
-        })();
-        return () => {
-            cancelled = true;
-        };
-    }, [form.serverId]);
-
-    useEffect(() => {
-        if (!isProviderPeer || !selectedInterface?.provider) return;
-        let cancelled = false;
-        void getProviderSchema(form.serverId, selectedInterface.provider).then(definition => {
-            if (!cancelled) setProviderDefinition(definition);
-        }).catch(error => toast.error(error instanceof Error ? error.message : String(error)));
-        return () => {cancelled = true;};
-    }, [form.serverId, isProviderPeer, selectedInterface?.provider]);
-
-    const peerSchema = React.useMemo(() => {
-        const definition = providerDefinition?.resources.find(resource => resource.kind === 'Peer');
-        if (!definition) return null;
-        const internal = new Set(['name', 'interfaceRef', 'userRef', 'publicKey', 'disabled']);
-        const properties = Object.fromEntries(Object.entries(definition.specSchema.properties ?? {}).filter(([key]) => !internal.has(key)));
-        const required = Array.isArray(definition.specSchema.required) ? definition.specSchema.required.filter(key => typeof key === 'string' && !internal.has(key)) : [];
-        return {...definition.specSchema, properties, required};
-    }, [providerDefinition]);
-    const hasProviderFields = isProviderPeer && Object.keys(peerSchema?.properties ?? {}).length > 0;
-
-    const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
-        const {name, value, type} = e.target;
-        const val = type === 'checkbox' ? (e.target as HTMLInputElement).checked : value;
-        setForm(prev => ({
-            ...prev,
-            [name]: val,
-            ...(name === 'serverId' ? {interfaceId: ''} : {}),
-            ...(name === 'serverId' || name === 'interfaceId' ? {spec: {}} : {}),
-        }));
-    };
-
-    const handleSubmit = async () => {
-        if (!form.interfaceId) return toast.error(t('peers.interfaceRequired'));
-        await onSubmit(form);
-    };
-
-    return (
-        <Modal title={t('peers.addPeer')} onClose={onClose} loading={loading}>
-            <div className="space-y-4">
-                <FormField label={`${t('common.name')} (${t('common.optional')})`}>
-                    <input
-                        type="text"
-                        name="name"
-                        value={form.name}
-                        onChange={handleChange}
-                        placeholder={t('peers.namePlaceholder')}
-                        disabled={loading}
-                        className={inputs.primary}
-                    />
-                </FormField>
-
-                <FormField label={`${t('peers.server')} (${t('common.required')})`}>
-                    <select
-                        name="serverId"
-                        value={form.serverId}
-                        onChange={handleChange}
-                        disabled={loading}
-                        className={inputs.primary}
-                    >
-                        <option value="">{t('peers.selectServer')}</option>
-                        {servers.map(server => (
-                            <option key={server.id} value={server.id}>{server.name}</option>
-                        ))}
-                    </select>
-                </FormField>
-
-                <FormField label={`${t('servers.interfaces.name')} (${t('common.required')})`}>
-                    <select
-                        name="interfaceId"
-                        value={form.interfaceId}
-                        onChange={handleChange}
-                        disabled={loading || !form.serverId}
-                        className={inputs.primary}
-                    >
-                        <option value="">
-                            {form.serverId ? t('peers.selectInterface') : t('peers.selectServerFirst')}
-                        </option>
-                        {interfaces.map(iface => (
-                            <option key={iface.id} value={iface.id}>{iface.name} ({iface.addr})</option>
-                        ))}
-                    </select>
-                </FormField>
-
-                {!isProviderPeer && <CollapsibleSection label={t('common.advancedSettings')}>
-                <FormField label={`${t('peers.allowedIPs')} (${t('common.optional')})`}>
-                    <input
-                        type="text"
-                        name="allowedIps"
-                        value={form.allowedIps}
-                        onChange={handleChange}
-                        placeholder={t('peers.allowedIpsAutoPlaceholder')}
-                        disabled={loading}
-                        className={inputs.primary}
-                    />
-                </FormField>
-
-                <FormField label={`${t('peers.endpoint')} (${t('common.optional')})`}>
-                    <input
-                        type="text"
-                        name="endpoint"
-                        value={form.endpoint}
-                        onChange={handleChange}
-                        placeholder="203.0.113.0:51820"
-                        disabled={loading}
-                        className={inputs.primary}
-                    />
-                </FormField>
-
-                <FormField label={`${t('peers.dns')} (${t('common.optional')})`}>
-                    <input
-                        type="text"
-                        name="dns"
-                        value={form.dns}
-                        onChange={handleChange}
-                        placeholder={t('peers.dnsPlaceholder')}
-                        disabled={loading}
-                        className={inputs.primary}
-                    />
-                </FormField>
-
-                <FormField label={`${t('peers.privateKey')} (${t('common.optional')})`}>
-                    <input
-                        type="text"
-                        name="privateKey"
-                        value={form.privateKey}
-                        onChange={handleChange}
-                        placeholder={t('peers.privateKeyPlaceholder')}
-                        disabled={loading}
-                        className={inputs.primary}
-                    />
-                </FormField>
-
-                <FormField label="">
-                    <label className="flex items-center cursor-pointer">
-                        <input
-                            type="checkbox"
-                            name="withPresharedKey"
-                            checked={form.withPresharedKey}
-                            onChange={handleChange}
-                            disabled={loading}
-                            className="rounded border-input bg-background text-sky-500 focus:ring-sky-500 focus:ring-offset-0 disabled:opacity-50 dark:border-white/10 dark:bg-white/5"
-                        />
-                        <span className="ml-3 text-sm font-medium text-foreground dark:text-zinc-300">
-                            {t('peers.generatePresharedKey')}
-                        </span>
-                    </label>
-                </FormField>
-
-                {!form.withPresharedKey && (
-                    <FormField label={`${t('peers.presharedKey')} (${t('common.optional')})`}>
-                        <input
-                            type="text"
-                            name="presharedKey"
-                            value={form.presharedKey}
-                            onChange={handleChange}
-                            placeholder={t('peers.presharedKeyPlaceholder')}
-                            disabled={loading}
-                            className={inputs.primary}
-                        />
-                    </FormField>
-                )}
-                </CollapsibleSection>}
-
-                {hasProviderFields && peerSchema && (
-                    <SchemaForm
-                        schema={peerSchema}
-                        formData={form.spec}
-                        onChange={spec => setForm(prev => ({...prev, spec}))}
-                        onSubmit={spec => onSubmit({...form, spec})}
-                        submitLabel={loading ? `${t('common.saving')}...` : t('peers.addPeer')}
-                        disabled={loading || !form.interfaceId}
-                    />
-                )}
-                {!hasProviderFields && (
-                    <div className="flex gap-3 pt-4">
-                        <button onClick={handleSubmit} disabled={loading || !form.interfaceId} className={cn('flex-1', buttons.primary)}>
-                            {loading ? `${t('common.saving')}...` : t('peers.addPeer')}
-                        </button>
-                        <button onClick={onClose} disabled={loading} className={cn('flex-1', buttons.secondary)}>{t('common.cancel')}</button>
-                    </div>
-                )}
-                {hasProviderFields && <button onClick={onClose} disabled={loading} className={cn('w-full', buttons.secondary)}>{t('common.cancel')}</button>}
-            </div>
-        </Modal>
-    );
-}
-
-// ---------------------------------------------------------------------------
-// UserDetail
-// ---------------------------------------------------------------------------
 
 export default function UserDetail() {
     const {t} = useTranslation();
     const {navigate} = useNavigation();
-    const {
-        users,
-        servers,
-        interfaces,
-        selectedUserId,
-        setSelectedUser,
-        updateUser,
-        deleteUser,
-        addPeer,
-        deletePeer,
-        refreshData,
-        getInterfaceName,
-    } = useAppStore();
-
-    const [isLoading, setIsLoading] = useState(false);
+    const {users, servers, resources, selectedUserId, setSelectedUser, updateUser, deleteUser, refreshData} = useAppStore();
     const [isEditing, setIsEditing] = useState(false);
-    const [showAddPeerModal, setShowAddPeerModal] = useState(false);
-    const [qrPeer, setQrPeer] = useState<{publicKey: string; name: string} | null>(null);
-    const [addPeerLoading, setAddPeerLoading] = useState(false);
-    const [deletePeerKey, setDeletePeerKey] = useState<string | null>(null);
-    const [deletePeerLoading, setDeletePeerLoading] = useState(false);
-    const [togglingPeerKey, setTogglingPeerKey] = useState<string | null>(null);
-    const [peerToMigrate, setPeerToMigrate] = useState<{publicKey: string; name: string; currentInterface: string} | null>(null);
-    const [migrateTarget, setMigrateTarget] = useState('');
-    const [migrateLoading, setMigrateLoading] = useState(false);
+    const [isLoading, setIsLoading] = useState(false);
     const [showDeleteUserConfirm, setShowDeleteUserConfirm] = useState(false);
     const [deleteUserLoading, setDeleteUserLoading] = useState(false);
-    const [formData, setFormData] = useState({
-        name: '',
-        description: '',
-        disabled: false,
-    });
-
-    const user = users.find(u => u.id === selectedUserId);
-
-    /* ---- Effects ---------------------------------------------------------- */
+    const [formData, setFormData] = useState({name: '', description: '', disabled: false});
+    const user = users.find(item => item.id === selectedUserId);
 
     useEffect(() => {
         if (!user) return;
-        const timeout = window.setTimeout(() => {
-            setFormData({
-                name: user.name || '',
-                description: user.description || '',
-                disabled: user.disabled || false,
-            });
-        }, 0);
+        const timeout = window.setTimeout(() => setFormData({name: user.name || '', description: user.description || '', disabled: user.disabled || false}), 0);
         return () => window.clearTimeout(timeout);
     }, [user]);
 
-    /* ---- Handlers --------------------------------------------------------- */
-
-    const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-        const {name, value, type} = e.target;
-        const val = type === 'checkbox' ? (e.target as HTMLInputElement).checked : value;
-        setFormData(prev => ({...prev, [name]: val}));
-    };
+    if (!user) return <div className="p-8 text-center text-muted-foreground">{t('users.noUser')}</div>;
 
     const handleSave = async () => {
         if (!selectedUserId || !formData.name.trim()) {
@@ -473,417 +54,66 @@ export default function UserDetail() {
         }
         setIsLoading(true);
         try {
-            const updated = await updateUser(selectedUserId, {
-                name: formData.name,
-                description: formData.description || undefined,
-                disabled: formData.disabled,
-            });
+            const updated = await updateUser(selectedUserId, {name: formData.name, description: formData.description || undefined, disabled: formData.disabled});
             if (updated) {
                 toast.success(t('users.userUpdated'));
                 setIsEditing(false);
+                await refreshData();
             } else {
                 toast.error(t('users.updateUserError'));
             }
-        } catch (error) {
-            console.error('Failed to update user:', error);
-            toast.error(t('users.updateUserError'));
         } finally {
             setIsLoading(false);
         }
     };
-
-    const handleCancel = () => {
-        if (user) {
-            setFormData({
-                name: user.name || '',
-                description: user.description || '',
-                disabled: user.disabled || false,
-            });
-        }
-        setIsEditing(false);
-    };
-
-    const handleAddPeer = async (form: PeerFormData) => {
-        if (!selectedUserId) {
-            toast.error(t('users.userNotSelected'));
-            return;
-        }
-
-        setAddPeerLoading(true);
-        try {
-            const allowedIpsArray = form.allowedIps
-                .split(',')
-                .map(ip => ip.trim())
-                .filter(Boolean);
-
-            const dnsArray = form.dns
-                .split(',')
-                .map(d => d.trim())
-                .filter(Boolean);
-
-            await addPeer(selectedUserId, {
-                name: form.name,
-                interfaceId: form.interfaceId,
-                spec: form.spec,
-                allowedIps: allowedIpsArray,
-                endpoint: form.endpoint || undefined,
-                dns: dnsArray.length ? dnsArray : undefined,
-                privateKey: form.privateKey.trim() || undefined,
-                presharedKey: form.withPresharedKey ? undefined : form.presharedKey.trim() || undefined,
-                withPresharedKey: form.withPresharedKey,
-            });
-
-            // addPeer resolves only on success (it throws otherwise, caught
-            // below) and already refreshes the store's data on success.
-            toast.success(t('peers.peerAdded'));
-            setShowAddPeerModal(false);
-        } catch (error) {
-            // Surface the specific backend reason (e.g. a duplicate or
-            // out-of-subnet IP) instead of a generic failure.
-            console.error('Failed to add peer:', error);
-            toast.error(error instanceof Error && error.message ? error.message : t('peers.addPeerError'));
-        } finally {
-            setAddPeerLoading(false);
-        }
-    };
-
-    const handleDeletePeer = async () => {
-        if (!selectedUserId || !deletePeerKey) return;
-        setDeletePeerLoading(true);
-        try {
-            const success = await deletePeer(selectedUserId, deletePeerKey);
-            if (success) {
-                toast.success(t('peers.deleted'));
-                await refreshData();
-            } else {
-                toast.error(t('peers.deleteError'));
-            }
-        } catch (error) {
-            console.error('Failed to delete peer:', error);
-            toast.error(t('peers.deleteError'));
-        } finally {
-            setDeletePeerLoading(false);
-            setDeletePeerKey(null);
-        }
-    };
-
-    const handleTogglePeerDisabled = async (publicKey: string, disabled: boolean) => {
-        if (!selectedUserId) return;
-        setTogglingPeerKey(publicKey);
-        try {
-            await setPeerDisabled(selectedUserId, publicKey, disabled);
-            toast.success(disabled ? t('peers.deactivated') : t('peers.activated'));
-            await refreshData();
-        } catch (error) {
-            console.error('Failed to toggle peer:', error);
-            toast.error(error instanceof Error && error.message ? error.message : t('peers.toggleError'));
-        } finally {
-            setTogglingPeerKey(null);
-        }
-    };
-
     const handleBack = () => {
         setSelectedUser(null);
         navigate('users');
     };
-
     const handleDeleteUser = async () => {
         if (!selectedUserId) return;
         setDeleteUserLoading(true);
         try {
-            const success = await deleteUser(selectedUserId);
-            if (success) {
+            if (await deleteUser(selectedUserId)) {
                 toast.success(t('users.userDeleted'));
                 handleBack();
             } else {
                 toast.error(t('users.deleteUserError'));
             }
-        } catch (error) {
-            console.error('Failed to delete user:', error);
-            toast.error(t('users.deleteUserError'));
         } finally {
             setDeleteUserLoading(false);
             setShowDeleteUserConfirm(false);
         }
     };
 
-    const getServerForInterface = (interfaceId: string) =>
-        servers.find(server => server.interfaces?.includes(interfaceId));
-
-    // Every interface across all servers, labelled "server/iface", for the
-    // migrate-peer picker (the target is filtered to exclude the peer's own
-    // interface at render time).
-    const interfaceOptions = servers.flatMap(server =>
-        (server.interfaces ?? [])
-            .map(id => interfaces.get(id))
-            .filter((i): i is Interface => !!i)
-            .map(i => ({id: i.id, label: `${server.name}/${i.iface}`})),
-    );
-
-    const handleMigratePeer = async () => {
-        if (!selectedUserId || !peerToMigrate || !migrateTarget) return;
-        setMigrateLoading(true);
-        try {
-            await migratePeer(selectedUserId, peerToMigrate.publicKey, migrateTarget);
-            toast.success(t('peers.migrated'));
-            setPeerToMigrate(null);
-            await refreshData();
-        } catch (error) {
-            // Surface the specific backend reason (e.g. no free address on the
-            // target) instead of a generic failure.
-            console.error('Failed to migrate peer:', error);
-            toast.error(error instanceof Error && error.message ? error.message : t('peers.migrateError'));
-        } finally {
-            setMigrateLoading(false);
-        }
-    };
-
-    /* ---- Render: empty state ---------------------------------------------- */
-
-    if (!user) {
-        return <div className="p-8 text-center text-muted-foreground">{t('users.noUser')}</div>;
-    }
-
-    /* ---- Render: main ----------------------------------------------------- */
-
     return (
         <div className="flex flex-col">
             <div className="flex items-center justify-between px-8 pt-6">
                 <h2 className="font-semibold">{user.name || t('users.noName')}</h2>
                 <div className="flex items-center gap-2">
-                    <button onClick={() => setShowDeleteUserConfirm(true)} className={buttons.danger} title={t('users.deleteUser')}><Trash2 size={14}/></button>
-                    <button onClick={handleBack} className={buttons.primary} title={t('users.backToUsers')}><ArrowLeft size={14}/></button>
+                    <button onClick={() => setShowDeleteUserConfirm(true)} className={buttons.danger} title={t('users.deleteUser')}><Trash2 size={14} /></button>
+                    <button onClick={handleBack} className={buttons.primary} title={t('users.backToUsers')}><ArrowLeft size={14} /></button>
                 </div>
             </div>
-
-            <div className="p-8 space-y-6">
-                {/* User Information */}
-                <Container
-                    title={t('users.information')}
-                    action={
-                        !isEditing && (
-                            <button onClick={() => setIsEditing(true)} className={buttons.primary}>
-                                <UserPen size={14}/>
-                            </button>
-                        )
-                    }
-                >
+            <div className="space-y-6 p-8">
+                <Container title={t('users.information')} action={!isEditing && <button onClick={() => setIsEditing(true)} className={buttons.primary}><UserPen size={14} /></button>}>
                     {isEditing ? (
-                        <form className="space-y-4">
-                            <FormField label={t('common.name')}>
-                                <input
-                                    type="text"
-                                    name="name"
-                                    value={formData.name}
-                                    onChange={handleInputChange}
-                                    disabled={isLoading}
-                                    className={inputs.primary}
-                                />
-                            </FormField>
-
-                            <FormField label={t('common.description')}>
-                <textarea
-                    name="description"
-                    value={formData.description}
-                    onChange={handleInputChange}
-                    disabled={isLoading}
-                    rows={4}
-                    className={cn(inputs.primary, "resize-none")}
-                />
-                            </FormField>
-
-                            <FormField label="">
-                                <label className="flex items-center cursor-pointer">
-                                    <input
-                                        type="checkbox"
-                                        name="disabled"
-                                        checked={formData.disabled}
-                                        onChange={handleInputChange}
-                                        disabled={isLoading}
-                                        className="rounded border-input bg-background text-red-500 focus:ring-red-500 focus:ring-offset-0 disabled:opacity-50 dark:border-white/10 dark:bg-white/5"
-                                    />
-                                    <span className="ml-3 text-sm font-medium text-foreground dark:text-zinc-300">
-                                        {t('common.disabled')}
-                                    </span>
-                                </label>
-                            </FormField>
-
+                        <form className="space-y-4" onSubmit={event => event.preventDefault()}>
+                            <FormField label={t('common.name')}><input value={formData.name} onChange={event => setFormData(current => ({...current, name: event.target.value}))} disabled={isLoading} className={inputs.primary} /></FormField>
+                            <FormField label={t('common.description')}><textarea value={formData.description} onChange={event => setFormData(current => ({...current, description: event.target.value}))} disabled={isLoading} rows={4} className={cn(inputs.primary, 'resize-none')} /></FormField>
+                            <label className="flex items-center gap-3 text-sm"><input type="checkbox" checked={formData.disabled} onChange={event => setFormData(current => ({...current, disabled: event.target.checked}))} disabled={isLoading} /><span>{t('common.disabled')}</span></label>
                             <div className="flex gap-3 pt-4">
-                                <button type="button" onClick={handleSave} disabled={isLoading}
-                                        className={buttons.primary}>
-                                    {isLoading ? `${t('common.saving')}...` : t('common.save')}
-                                </button>
-                                <button type="button" onClick={handleCancel} disabled={isLoading}
-                                        className={buttons.secondary}>
-                                    {t('common.cancel')}
-                                </button>
+                                <button type="button" onClick={() => void handleSave()} disabled={isLoading} className={buttons.primary}>{isLoading ? `${t('common.saving')}...` : t('common.save')}</button>
+                                <button type="button" onClick={() => setIsEditing(false)} disabled={isLoading} className={buttons.secondary}>{t('common.cancel')}</button>
                             </div>
                         </form>
                     ) : (
-                        <div className="flex items-center gap-4 text-sm">
-              <span className="text-foreground font-semibold flex-1 dark:text-zinc-100">
-                {user.description || '—'}
-              </span>
-                            <span className="text-muted-foreground dark:text-zinc-400">|</span>
-                            <StatusBadge status={!user.disabled ? 'enabled' : 'disabled'} size="sm"/>
-                        </div>
+                        <div className="flex items-center gap-4 text-sm"><span className="flex-1 font-semibold">{user.description || '—'}</span><StatusBadge status={user.disabled ? 'disabled' : 'enabled'} size="sm" /></div>
                     )}
                 </Container>
-
-                {/* Peers */}
-                <Container
-                    title={
-                        <span
-                            className="flex items-center gap-2 text-lg font-semibold text-foreground dark:text-zinc-100">
-                            <Key size={20}/>
-                            {t('users.peers')} ({user?.peers?.length || 0})
-                        </span>
-                    }
-                    action={
-                        <button onClick={() => setShowAddPeerModal(true)} className={buttons.primary} title={t('peers.addPeer')}>
-                            <Plus size={14}/>
-                        </button>
-                    }
-                >
-                    {user?.peers && user.peers.length > 0 ? (
-                        <div className="space-y-3">
-                            {user.peers.map((peer, index) => (
-                                <div
-                                    key={index}
-                                    className="rounded-lg border border-input bg-background p-4 dark:border-white/10 dark:bg-white/5"
-                                >
-                                    <div className="flex items-center justify-between mb-2">
-                                        <div className="flex min-w-0 items-center gap-2">
-                                            <div
-                                                className="min-w-0 truncate text-sm font-medium text-foreground dark:text-zinc-300">{peer.name}</div>
-                                            <span className="shrink-0">
-                                                <StatusBadge status={peer.disabled ? 'disabled' : 'enabled'} size="sm"/>
-                                            </span>
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                            {/*<CopyButton value={peer.pk}/>*/}
-                                            <button
-                                                onClick={() => setQrPeer({publicKey: peer.pk, name: peer.name})}
-                                                className="p-1 text-muted-foreground hover:text-foreground dark:text-zinc-500 dark:hover:text-zinc-300 rounded transition-colors"
-                                                title={t('peers.showQrCode')}
-                                            >
-                                                <QrCode size={16}/>
-                                            </button>
-                                            {(!peer.provider || peer.provider === 'awg') && <button
-                                                onClick={() => { setMigrateTarget(''); setPeerToMigrate({publicKey: peer.pk, name: peer.name, currentInterface: peer.interface}); }}
-                                                className="p-1 text-muted-foreground hover:text-foreground dark:text-zinc-500 dark:hover:text-zinc-300 rounded transition-colors"
-                                                title={t('peers.migrateTooltip')}
-                                            >
-                                                <ArrowRightLeft size={16}/>
-                                            </button>}
-                                            <button
-                                                onClick={() => handleTogglePeerDisabled(peer.pk, !peer.disabled)}
-                                                disabled={togglingPeerKey === peer.pk}
-                                                className={cn(
-                                                    'p-1 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
-                                                    peer.disabled
-                                                        ? 'text-muted-foreground hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-500/10'
-                                                        : 'text-muted-foreground hover:text-orange-600 dark:hover:text-orange-400 hover:bg-orange-100 dark:hover:bg-orange-500/10',
-                                                )}
-                                                title={peer.disabled ? t('peers.activateTooltip') : t('peers.deactivateTooltip')}
-                                            >
-                                                {peer.disabled ? <Power size={16}/> : <PowerOff size={16}/>}
-                                            </button>
-                                            <button
-                                                onClick={() => setDeletePeerKey(peer.pk)}
-                                                className="p-1 text-muted-foreground hover:text-red-600 dark:hover:text-red-400 hover:bg-red-100 dark:hover:bg-red-500/10 rounded transition-colors"
-                                                title={t('peers.deletePeerTooltip')}
-                                            >
-                                                <Trash2 size={16}/>
-                                            </button>
-                                        </div>
-                                    </div>
-                                    <div className="text-xs text-muted-foreground dark:text-zinc-500">
-                    <span className="text-foreground font-semibold dark:text-zinc-300">
-                      {t('peers.server')}: {getServerForInterface(peer.interface)?.name}/
-                        {getInterfaceName(peer.interface) || peer.interface}
-                    </span>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    ) : (
-                        <div
-                            className="text-center text-muted-foreground dark:text-zinc-500 py-4">{t('users.noPeers')}</div>
-                    )}
-                </Container>
+                <UserPeerManager user={user} servers={servers} resources={resources} onChanged={refreshData} />
             </div>
-
-            {showAddPeerModal && (
-                <AddPeerModal
-                    servers={servers}
-                    onSubmit={handleAddPeer}
-                    onClose={() => setShowAddPeerModal(false)}
-                    loading={addPeerLoading}
-                />
-            )}
-
-            {qrPeer && selectedUserId && (
-                <PeerQRModal
-                    userId={selectedUserId}
-                    publicKey={qrPeer.publicKey}
-                    peerName={qrPeer.name}
-                    onClose={() => setQrPeer(null)}
-                />
-            )}
-
-            {showDeleteUserConfirm && (
-                <ConfirmModal
-                    title={t('users.deleteUser')}
-                    message={t('users.confirmDeleteUser')}
-                    onConfirm={handleDeleteUser}
-                    onCancel={() => setShowDeleteUserConfirm(false)}
-                    loading={deleteUserLoading}
-                />
-            )}
-
-            {deletePeerKey && (
-                <ConfirmModal
-                    title={t('peers.deletePeerTooltip')}
-                    message={t('peers.confirmDelete')}
-                    onConfirm={handleDeletePeer}
-                    onCancel={() => setDeletePeerKey(null)}
-                    loading={deletePeerLoading}
-                />
-            )}
-
-            {peerToMigrate && (() => {
-                const targets = interfaceOptions.filter((o) => o.id !== peerToMigrate.currentInterface);
-                return (
-                    <Modal title={t('peers.migrateTitle')} onClose={() => setPeerToMigrate(null)} loading={migrateLoading}>
-                        <p className="text-sm text-muted-foreground dark:text-zinc-400 mb-4">
-                            {t('peers.migrateHint', {name: peerToMigrate.name})}
-                        </p>
-                        {targets.length === 0 ? (
-                            <p className="text-sm text-muted-foreground dark:text-zinc-500">{t('peers.migrateNoTargets')}</p>
-                        ) : (
-                            <FormField label={t('servers.interface')}>
-                                <select
-                                    value={migrateTarget}
-                                    onChange={(e) => setMigrateTarget(e.target.value)}
-                                    className={inputs.primary}
-                                >
-                                    <option value="">{t('tunnels.selectInterface')}</option>
-                                    {targets.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-                                </select>
-                            </FormField>
-                        )}
-                        <div className="flex justify-end gap-2 mt-6">
-                            <button onClick={() => setPeerToMigrate(null)} disabled={migrateLoading} className={buttons.secondary}>
-                                {t('common.cancel')}
-                            </button>
-                            <button onClick={handleMigratePeer} disabled={migrateLoading || !migrateTarget || targets.length === 0} className={buttons.primary}>
-                                {t('peers.migrate')}
-                            </button>
-                        </div>
-                    </Modal>
-                );
-            })()}
+            {showDeleteUserConfirm && <ConfirmModal title={t('users.deleteUser')} message={t('users.confirmDeleteUser')} onConfirm={() => void handleDeleteUser()} onCancel={() => setShowDeleteUserConfirm(false)} loading={deleteUserLoading} />}
         </div>
     );
 }

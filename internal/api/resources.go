@@ -50,6 +50,14 @@ func (h *Handler) providerSchema(w http.ResponseWriter, r bunrouter.Request) err
 	return bunrouter.JSON(w, definition)
 }
 
+func (h *Handler) resourceList(w http.ResponseWriter, r bunrouter.Request) error {
+	resources, err := h.svc.ListResources(r.Param("serverID"))
+	if err != nil {
+		return handleErr(err, resourceFields(r))
+	}
+	return bunrouter.JSON(w, resources)
+}
+
 func (h *Handler) providerResourceList(w http.ResponseWriter, r bunrouter.Request) error {
 	resources, err := h.svc.ListProviderResources(r.Param("serverID"), r.Param("provider"))
 	if err != nil {
@@ -97,6 +105,20 @@ func (h *Handler) providerResourceAction(w http.ResponseWriter, r bunrouter.Requ
 		return badRequest(err)
 	}
 	result, err := h.svc.RunProviderResourceAction(r.Param("serverID"), r.Param("provider"), r.Param("kind"), r.Param("name"), r.Param("action"), input.Arguments)
+	if err != nil {
+		return handleErr(err, resourceFields(r))
+	}
+	return bunrouter.JSON(w, result)
+}
+
+func (h *Handler) providerClientConfig(w http.ResponseWriter, r bunrouter.Request) error {
+	var input struct {
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := decode(r, &input); err != nil {
+		return badRequest(err)
+	}
+	result, err := h.svc.RenderProviderClientConfig(r.Param("serverID"), r.Param("provider"), r.Param("kind"), r.Param("name"), input.Arguments)
 	if err != nil {
 		return handleErr(err, resourceFields(r))
 	}

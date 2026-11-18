@@ -564,7 +564,6 @@ Standalone routes перечислены в `internal/api/handler.go`; desktop �
 | `/links/*` | Provider links: list/create/apply/move/delete. |
 | `/artifacts/*`, `/registry-sources/*` | OCI tags, provider catalog и сохранённые registry. |
 | `/users/*` | Глобальные пользователи и provider peers. |
-| `/tunnels/*` | Совместимость со старой двухузловой моделью; для новых маршрутов используйте Graph/links. |
 
 Все операционные routes, кроме login/logout, требуют standalone session. Перемещение использует `PUT /links/:linkID` и
 `PUT /topology/connections/:connectionID`; создание plugin service — `POST /topology/services`.

@@ -20,241 +20,250 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"sync"
 	"testing"
-
-	awgmodels "github.com/ks-tool/vpn-agent/v2/providers/awg/models"
+	"uuid"
 
 	"github.com/ks-tool/vpn-admin/internal/pki"
 	"github.com/ks-tool/vpn-admin/models"
+	"github.com/ks-tool/vpn-admin/storage"
 	"github.com/ks-tool/vpn-admin/storage/boltdb"
 	agentmodels "github.com/ks-tool/vpn-agent/v2/models"
+	awgmodels "github.com/ks-tool/vpn-agent/v2/providers/awg/models"
 )
 
-// fakeAgentTLS is a minimal stand-in for the real agent's HTTP API, served
-// over mTLS like a server with AgentTLS configured would be reached
-// directly (no SSH tunnel). It tracks every config it was asked to Set, so
-// tests can assert pushes actually happened.
 type fakeAgentTLS struct {
-	mu              sync.Mutex
-	store           map[string]awgmodels.InterfaceConfig
-	replacePeers    map[string]bool
-	metrics         map[string]awgmodels.InterfaceSnapshot
-	resources       map[string]models.Resource
-	schemaCalls     int
-	actionCalls     int
-	putOrder        []string
-	putProviders    []string
-	deleteProviders []string
-	commitCalls     int
-	deleteCalls     int
-	failCommit      bool
-	awg             bool
-	providerErrors  map[string]string
-	legacyDisabled  bool
-
-	// Discovery/import inputs (see the wg-quick import tests): live devices the
-	// agent has no config for, the conf files "on disk" by interface name, and
-	// the host facts served by /info.
-	unmanaged []models.UnmanagedInterface
-	sources   map[string]string
-	info      agentmodels.HostInfo
+	mu                   sync.Mutex
+	metrics              map[string]awgmodels.InterfaceSnapshot
+	resources            map[string]models.Resource
+	schemaCalls          int
+	actionCalls          int
+	actionFailures       int
+	actionResources      []string
+	actionArguments      json.RawMessage
+	putOrder             []string
+	putSpecs             []json.RawMessage
+	putProviders         []string
+	deleteProviders      []string
+	commitCalls          int
+	prepareGenerations   []int64
+	commitGenerations    []int64
+	offerGenerations     []int64
+	deleteCalls          int
+	failCommit           bool
+	awg                  bool
+	providerErrors       map[string]string
+	withoutActions       bool
+	strictGenerations    bool
+	pendingCreates       bool
+	preserveUpdateStatus bool
+	validatePeerSecrets  bool
+	beforePut            func(int, string, models.Resource)
+	info                 agentmodels.HostInfo
 }
 
 func newFakeAgentTLS(t *testing.T) (*httptest.Server, *models.AgentTLS, *fakeAgentTLS) {
 	t.Helper()
-
-	fa := &fakeAgentTLS{
-		store:        make(map[string]awgmodels.InterfaceConfig),
-		replacePeers: make(map[string]bool),
-		metrics:      make(map[string]awgmodels.InterfaceSnapshot),
-		resources:    make(map[string]models.Resource),
-		sources:      make(map[string]string),
-		info:         agentmodels.HostInfo{Backend: "kernel", Version: "test", InterfaceKinds: []string{"amneziawg", "wireguard"}},
-	}
+	fa := &fakeAgentTLS{metrics: make(map[string]awgmodels.InterfaceSnapshot), resources: make(map[string]models.Resource), info: agentmodels.HostInfo{Backend: "kernel", Version: "test"}}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /metrics/{name}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /v2/providers/awg/bridge/metrics", func(w http.ResponseWriter, r *http.Request) {
 		fa.mu.Lock()
-		snapshot, ok := fa.metrics[r.PathValue("name")]
-		fa.mu.Unlock()
-		if !ok {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
+		snapshot := awgmodels.MetricsSnapshot{Interfaces: make([]awgmodels.InterfaceSnapshot, 0, len(fa.metrics))}
+		for _, item := range fa.metrics {
+			snapshot.Interfaces = append(snapshot.Interfaces, item)
 		}
+		fa.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(snapshot)
 	})
-	mux.HandleFunc("GET /interfaces/unmanaged", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /v2/providers/awg/bridge/metrics/history", func(w http.ResponseWriter, r *http.Request) {
 		fa.mu.Lock()
-		out := append([]models.UnmanagedInterface{}, fa.unmanaged...)
-		fa.mu.Unlock()
-		_ = json.NewEncoder(w).Encode(out)
-	})
-	mux.HandleFunc("GET /interfaces/{name}/import-source", func(w http.ResponseWriter, r *http.Request) {
-		fa.mu.Lock()
-		content, ok := fa.sources[r.PathValue("name")]
-		fa.mu.Unlock()
-		if !ok {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
+		history := awgmodels.SystemHistory{Interfaces: make([]awgmodels.InterfaceHistory, 0, len(fa.metrics))}
+		for name, item := range fa.metrics {
+			iface := awgmodels.InterfaceHistory{Interface: name}
+			for _, peer := range item.Peers {
+				iface.Peers = append(iface.Peers, awgmodels.PeerHistory{PublicKey: peer.PublicKey, Points: []awgmodels.PeerHistoryPoint{{RxBytes: peer.RxBytes, TxBytes: peer.TxBytes, LastHandshake: peer.LastHandshake}}})
+			}
+			history.Interfaces = append(history.Interfaces, iface)
 		}
-		_ = json.NewEncoder(w).Encode(models.ImportSource{Path: "/etc/wireguard/" + r.PathValue("name") + ".conf", Content: content})
+		fa.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(history)
 	})
 	mux.HandleFunc("GET /info", func(w http.ResponseWriter, r *http.Request) {
-		fa.mu.Lock()
-		info := fa.info
-		fa.mu.Unlock()
-		_ = json.NewEncoder(w).Encode(info)
-	})
-	mux.HandleFunc("PUT /interfaces", func(w http.ResponseWriter, r *http.Request) {
-		var cfg awgmodels.InterfaceConfig
-		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		fa.mu.Lock()
-		fa.store[cfg.Interface] = cfg
-		fa.replacePeers[cfg.Interface] = r.URL.Query().Get("replacePeers") == "true"
-		fa.mu.Unlock()
-		w.WriteHeader(http.StatusCreated)
-	})
-	mux.HandleFunc("DELETE /interfaces/{name}", func(w http.ResponseWriter, r *http.Request) {
-		fa.mu.Lock()
-		_, ok := fa.store[r.PathValue("name")]
-		delete(fa.store, r.PathValue("name"))
-		fa.mu.Unlock()
-		if !ok {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	})
-	mux.HandleFunc("GET /interfaces/", func(w http.ResponseWriter, r *http.Request) {
-		fa.mu.Lock()
-		if fa.legacyDisabled {
-			fa.mu.Unlock()
-			http.NotFound(w, r)
-			return
-		}
-		out := make([]awgmodels.InterfaceConfig, 0, len(fa.store))
-		for _, cfg := range fa.store {
-			out = append(out, cfg)
-		}
-		fa.mu.Unlock()
-		_ = json.NewEncoder(w).Encode(out)
-	})
-	mux.HandleFunc("GET /interfaces/{name}", func(w http.ResponseWriter, r *http.Request) {
-		fa.mu.Lock()
-		cfg, ok := fa.store[r.PathValue("name")]
-		fa.mu.Unlock()
-		if !ok {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(cfg)
+		_ = json.NewEncoder(w).Encode(fa.info)
 	})
 	definition := models.ResourceDefinition{APIVersion: "test/v1", Kind: "Service", SpecSchema: json.RawMessage(`{"type":"object"}`), SchemaHash: "hash", Actions: []models.ActionDefinition{{Name: "importSecret", Title: "Import", ResultType: models.ActionResultJSON, Mutating: true}}, Ports: []models.PortDefinition{{Name: "tunnel", LinkKinds: []string{"test-link"}, RemotePorts: []string{"tunnel"}}}}
-	testProviderDefinition := models.ProviderDefinition{Name: "test", Version: "1", Resources: []models.ResourceDefinition{
-		definition,
-		{APIVersion: "test/v1", Kind: "Interface", SpecSchema: json.RawMessage(`{"type":"object"}`)},
-		{APIVersion: "test/v1", Kind: "Peer", SpecSchema: json.RawMessage(`{"type":"object"}`)},
-	}}
-	awgDefinition := models.ProviderDefinition{Name: "awg", Version: "1", Resources: []models.ResourceDefinition{
-		{APIVersion: "awg.ks-tool.dev/v1", Kind: "Interface", SpecSchema: json.RawMessage(`{"type":"object"}`), Actions: []models.ActionDefinition{{Name: "importSecret", Title: "Import", ResultType: models.ActionResultJSON, Mutating: true}}},
-		{APIVersion: "awg.ks-tool.dev/v1", Kind: "Peer", SpecSchema: json.RawMessage(`{"type":"object"}`), Actions: []models.ActionDefinition{{Name: "importSecret", Title: "Import", ResultType: models.ActionResultJSON, Mutating: true}}},
-	}}
-	mux.HandleFunc("GET /v1/manifest", func(w http.ResponseWriter, r *http.Request) {
+	testProvider := models.ProviderDefinition{Name: "test", Version: "1", Resources: []models.ResourceDefinition{definition, {APIVersion: "test/v1", Kind: "Interface", SpecSchema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"addr":{"type":"string"}}}`), SchemaHash: "hash", Ports: definition.Ports, Actions: definition.Actions}, {APIVersion: "test/v1", Kind: "Peer", SpecSchema: json.RawMessage(`{"type":"object"}`), SchemaHash: "hash", Actions: definition.Actions}}}
+	awgProvider := models.ProviderDefinition{Name: "awg", Version: "1", Resources: []models.ResourceDefinition{{APIVersion: "awg.ks-tool.dev/v1", Kind: "Interface", SpecSchema: json.RawMessage(`{"type":"object"}`), SchemaHash: "hash", Actions: definition.Actions}, {APIVersion: "awg.ks-tool.dev/v1", Kind: "Peer", SpecSchema: json.RawMessage(`{"type":"object"}`), SchemaHash: "hash", Actions: definition.Actions}}}
+	mux.HandleFunc("GET /v2/manifest", func(w http.ResponseWriter, r *http.Request) {
 		fa.mu.Lock()
 		awg := fa.awg
 		providerErrors := fa.providerErrors
 		fa.mu.Unlock()
-		providers := []models.ProviderDefinition{testProviderDefinition}
+		providers := []models.ProviderDefinition{testProvider}
 		if awg {
-			providers = append(providers, awgDefinition)
+			providers = append(providers, awgProvider)
 		}
 		_ = json.NewEncoder(w).Encode(models.Manifest{ProtocolVersion: models.ProtocolVersion, Providers: providers, ProviderErrors: providerErrors})
 	})
-	mux.HandleFunc("GET /v1/providers/{provider}/schema", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /v2/providers/{provider}/schema", func(w http.ResponseWriter, r *http.Request) {
 		fa.mu.Lock()
 		fa.schemaCalls++
+		withoutActions := fa.withoutActions
 		fa.mu.Unlock()
+		if withoutActions {
+			testProvider.Resources = append([]models.ResourceDefinition(nil), testProvider.Resources...)
+			for index := range testProvider.Resources {
+				testProvider.Resources[index].Actions = nil
+			}
+		}
 		if r.PathValue("provider") == "awg" {
-			_ = json.NewEncoder(w).Encode(awgDefinition)
+			_ = json.NewEncoder(w).Encode(awgProvider)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(testProviderDefinition)
+		_ = json.NewEncoder(w).Encode(testProvider)
 	})
-	mux.HandleFunc("GET /v1/providers/{provider}/resources", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /v2/providers/{provider}/resources", func(w http.ResponseWriter, r *http.Request) {
 		fa.mu.Lock()
 		out := make([]models.Resource, 0, len(fa.resources))
 		for _, item := range fa.resources {
-			out = append(out, item)
+			if providerFromAPIVersion(item.APIVersion) == r.PathValue("provider") {
+				out = append(out, item)
+			}
 		}
 		fa.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(out)
 	})
-	mux.HandleFunc("PUT /v1/providers/{provider}/resources/{kind}/{name}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("PUT /v2/providers/{provider}/resources/{kind}/{name}", func(w http.ResponseWriter, r *http.Request) {
 		var desired models.Resource
 		if err := json.NewDecoder(r.Body).Decode(&desired); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		fa.mu.Lock()
-		fa.putProviders = append(fa.putProviders, r.PathValue("provider"))
+		putIndex := len(fa.putOrder)
+		beforePut := fa.beforePut
+		fa.mu.Unlock()
 		key := r.PathValue("kind") + "/" + r.PathValue("name")
+		if beforePut != nil {
+			beforePut(putIndex, key, desired)
+		}
+		fa.mu.Lock()
+		fa.putProviders = append(fa.putProviders, r.PathValue("provider"))
 		previous, exists := fa.resources[key]
-		if !exists {
-			fa.putOrder = append(fa.putOrder, desired.Kind)
-			desired.ID = "resource-id"
-			desired.Generation = 1
-		} else {
+		fa.putOrder = append(fa.putOrder, desired.Kind)
+		fa.putSpecs = append(fa.putSpecs, append(json.RawMessage(nil), desired.Spec...))
+		if fa.strictGenerations && (exists && desired.Generation != previous.Generation || !exists && desired.Generation > 1) {
+			fa.mu.Unlock()
+			http.Error(w, "resource generation conflict", http.StatusConflict)
+			return
+		}
+		if exists {
 			desired.ID = previous.ID
 			desired.Generation = previous.Generation + 1
+		} else {
+			if len(desired.ID) == 0 {
+				desired.ID = "resource-id"
+			}
+			desired.Generation = 1
 		}
 		desired.Status = models.ResourceStatus{ObservedGeneration: desired.Generation, Phase: models.ResourceReady}
+		if exists && fa.preserveUpdateStatus {
+			desired.Status = previous.Status
+			desired.Status.Phase = models.ResourcePending
+		}
+		if fa.pendingCreates && !exists {
+			desired.Status = models.ResourceStatus{Phase: models.ResourcePending}
+		}
 		fa.resources[key] = desired
 		fa.mu.Unlock()
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(desired)
 	})
-	mux.HandleFunc("GET /v1/providers/{provider}/resources/{kind}/{name}/status", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /v2/providers/{provider}/resources/{kind}/{name}/status", func(w http.ResponseWriter, r *http.Request) {
 		fa.mu.Lock()
 		item := fa.resources[r.PathValue("kind")+"/"+r.PathValue("name")]
 		fa.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(item.Status)
 	})
-	mux.HandleFunc("POST /v1/providers/{provider}/resources/{kind}/{name}/actions/{action}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /v2/providers/{provider}/resources/{kind}/{name}/actions/{action}", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := json.Marshal(json.RawMessage(`{}`))
+		var input struct {
+			Arguments json.RawMessage `json:"arguments"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&input)
+		if fa.validatePeerSecrets && r.PathValue("kind") == "Peer" && r.PathValue("action") == "importSecret" {
+			fa.mu.Lock()
+			item := fa.resources[r.PathValue("kind")+"/"+r.PathValue("name")]
+			fa.mu.Unlock()
+			var spec struct {
+				PublicKey string `json:"publicKey"`
+			}
+			var arguments struct {
+				PrivateKey string `json:"privateKey"`
+			}
+			_ = json.Unmarshal(item.Spec, &spec)
+			_ = json.Unmarshal(input.Arguments, &arguments)
+			if len(arguments.PrivateKey) > 0 {
+				privateKey, err := awgmodels.ParseKey(arguments.PrivateKey)
+				if err != nil || resourceTestPublicKey(privateKey) != spec.PublicKey {
+					http.Error(w, "private key does not match peer public key", http.StatusInternalServerError)
+					return
+				}
+			}
+		}
 		fa.mu.Lock()
 		fa.actionCalls++
+		fa.actionResources = append(fa.actionResources, r.PathValue("kind")+"/"+r.PathValue("name"))
+		fa.actionArguments = input.Arguments
+		failed := fa.actionFailures > 0
+		if failed {
+			fa.actionFailures--
+		}
 		fa.mu.Unlock()
+		if failed {
+			http.Error(w, "temporary action failure", http.StatusInternalServerError)
+			return
+		}
 		if r.PathValue("action") == "renderClientConfig" {
 			_ = json.NewEncoder(w).Encode(models.ActionResult{Type: models.ActionResultFile, Data: json.RawMessage(`"test://client"`), FileName: "peer.txt"})
 			return
 		}
-		_ = json.NewEncoder(w).Encode(models.ActionResult{Type: models.ActionResultJSON, Data: json.RawMessage(`{"ok":true}`)})
+		_, _ = w.Write(body)
 	})
-	mux.HandleFunc("DELETE /v1/providers/{provider}/resources/{kind}/{name}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("DELETE /v2/providers/{provider}/resources/{kind}/{name}", func(w http.ResponseWriter, r *http.Request) {
 		fa.mu.Lock()
 		fa.deleteProviders = append(fa.deleteProviders, r.PathValue("provider"))
 		delete(fa.resources, r.PathValue("kind")+"/"+r.PathValue("name"))
 		fa.mu.Unlock()
 		w.WriteHeader(http.StatusAccepted)
 	})
-	mux.HandleFunc("POST /v1/providers/{provider}/links/prepare", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /v2/providers/{provider}/links/prepare", func(w http.ResponseWriter, r *http.Request) {
 		var request models.LinkRequest
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(models.LinkOffer{LinkID: request.Link.ID, Endpoint: request.Endpoint, Data: json.RawMessage(`{"publicKey":"test-public-key"}`)})
+		fa.mu.Lock()
+		fa.prepareGenerations = append(fa.prepareGenerations, request.Link.Generation)
+		fa.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(models.LinkOffer{LinkID: request.Link.ID, LinkGeneration: request.Link.Generation, Endpoint: request.Endpoint, Data: json.RawMessage(`{"publicKey":"test-public-key"}`)})
 	})
-	mux.HandleFunc("POST /v1/providers/{provider}/links/commit", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /v2/providers/{provider}/links/commit", func(w http.ResponseWriter, r *http.Request) {
+		var request models.LinkRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		fa.mu.Lock()
 		defer fa.mu.Unlock()
+		fa.commitGenerations = append(fa.commitGenerations, request.Link.Generation)
+		if request.RemoteOffer != nil {
+			fa.offerGenerations = append(fa.offerGenerations, request.RemoteOffer.LinkGeneration)
+		}
 		if fa.failCommit {
 			fa.failCommit = false
 			http.Error(w, "temporary commit failure", http.StatusInternalServerError)
@@ -263,7 +272,7 @@ func newFakeAgentTLS(t *testing.T) (*httptest.Server, *models.AgentTLS, *fakeAge
 		fa.commitCalls++
 		w.WriteHeader(http.StatusAccepted)
 	})
-	mux.HandleFunc("POST /v1/providers/{provider}/links/delete", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /v2/providers/{provider}/links/delete", func(w http.ResponseWriter, r *http.Request) {
 		fa.mu.Lock()
 		fa.deleteCalls++
 		fa.mu.Unlock()
@@ -271,55 +280,28 @@ func newFakeAgentTLS(t *testing.T) (*httptest.Server, *models.AgentTLS, *fakeAge
 	})
 
 	ts := httptest.NewUnstartedServer(mux)
-
 	tlsMaterial, err := pki.IssueAgentTLS("test-agent", []net.IP{net.ParseIP("127.0.0.1")}, nil)
 	if err != nil {
-		t.Fatalf("IssueAgentTLS: %v", err)
+		t.Fatal(err)
 	}
-
 	serverCert, err := tls.X509KeyPair([]byte(tlsMaterial.Server.Certificate), []byte(tlsMaterial.Server.PrivateKey))
 	if err != nil {
-		t.Fatalf("parse server cert: %v", err)
+		t.Fatal(err)
 	}
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM([]byte(tlsMaterial.CA.Certificate)) {
-		t.Fatal("failed to load CA cert into pool")
+		t.Fatal("failed to load CA cert")
 	}
-	ts.TLS = &tls.Config{
-		Certificates: []tls.Certificate{serverCert},
-		ClientAuth:   tls.RequireAndVerifyClientCert,
-		ClientCAs:    pool,
-	}
+	ts.TLS = &tls.Config{Certificates: []tls.Certificate{serverCert}, ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool, MinVersion: tls.VersionTLS12}
 	ts.StartTLS()
-
 	return ts, tlsMaterial, fa
-}
-
-func (fa *fakeAgentTLS) get(name string) (awgmodels.InterfaceConfig, bool) {
-	fa.mu.Lock()
-	defer fa.mu.Unlock()
-	cfg, ok := fa.store[name]
-	return cfg, ok
-}
-
-func (fa *fakeAgentTLS) clear() {
-	fa.mu.Lock()
-	defer fa.mu.Unlock()
-	fa.store = make(map[string]awgmodels.InterfaceConfig)
-	fa.replacePeers = make(map[string]bool)
-}
-
-func (fa *fakeAgentTLS) replacedPeers(name string) bool {
-	fa.mu.Lock()
-	defer fa.mu.Unlock()
-	return fa.replacePeers[name]
 }
 
 func newTestService(t *testing.T) *Service {
 	t.Helper()
 	db, err := boltdb.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
-		t.Fatalf("open db: %v", err)
+		t.Fatal(err)
 	}
 	svc := New(db)
 	t.Cleanup(svc.StopTunnels)
@@ -327,375 +309,63 @@ func newTestService(t *testing.T) *Service {
 	return svc
 }
 
-func mustParseKey(t *testing.T, k awgmodels.Key) string {
+func newTestServerWithAgent(t *testing.T) (*Service, *models.Server, *fakeAgentTLS) {
 	t.Helper()
-	return k.String()
-}
-
-func TestInterfaceAndPeerMutationsPushToAgent(t *testing.T) {
-	ts, tlsMaterial, fa := newFakeAgentTLS(t)
-	defer ts.Close()
-
+	t.Setenv("HOME", t.TempDir())
+	ts, tlsMaterial, agent := newFakeAgentTLS(t)
+	t.Cleanup(ts.Close)
 	svc := newTestService(t)
-
-	srv, err := svc.CreateServer(ServerInput{
-		Name: "srv1",
-		SSH:  models.SSHConfig{Host: "example.invalid", User: "root", Password: "x"},
-		Agent: models.Agent{
-			Address: ts.Listener.Addr().String(),
-			TLS:     tlsMaterial,
-		},
-	})
+	server, err := svc.CreateServer(ServerInput{Name: "srv1", SSH: models.SSHConfig{Host: "example.invalid", User: "root", Password: "x"}, Agent: models.Agent{Address: ts.Listener.Addr().String(), TLS: tlsMaterial}})
 	if err != nil {
-		t.Fatalf("CreateServer: %v", err)
+		t.Fatal(err)
 	}
-
-	// Create: should push immediately and come back InSync.
-	iface, err := svc.CreateInterface(srv.ID.String(), awgmodels.InterfaceConfig{
-		Interface:  "wg0",
-		Address:    "10.0.0.1/24",
-		ListenPort: 51820,
-	})
-	if err != nil {
-		t.Fatalf("CreateInterface: %v", err)
-	}
-	if !iface.InSync || iface.LastSyncError != "" {
-		t.Fatalf("CreateInterface: expected InSync, got InSync=%v err=%q", iface.InSync, iface.LastSyncError)
-	}
-	if cfg, ok := fa.get("wg0"); !ok || cfg.Address != "10.0.0.1/24" {
-		t.Fatalf("agent did not receive pushed config: %+v, ok=%v", cfg, ok)
-	}
-
-	// Update: should re-push with the new address.
-	updated, err := svc.UpdateInterfaceConfig(srv.ID.String(), iface.ID.String(), awgmodels.InterfaceConfig{
-		Interface:  "wg0",
-		Address:    "10.0.0.2/24",
-		ListenPort: 51821,
-	})
-	if err != nil {
-		t.Fatalf("UpdateInterfaceConfig: %v", err)
-	}
-	if !updated.InSync {
-		t.Fatalf("UpdateInterfaceConfig: expected InSync, got %+v", updated)
-	}
-	if cfg, ok := fa.get("wg0"); !ok || cfg.Address != "10.0.0.2/24" {
-		t.Fatalf("agent did not receive updated config: %+v, ok=%v", cfg, ok)
-	}
-
-	// AddPeer: the agent has no separate peers endpoint, so the peer
-	// mutation must trigger a full interface re-push including the peer.
-	user, err := svc.CreateUser(UserInput{Name: "u1"})
-	if err != nil {
-		t.Fatalf("CreateUser: %v", err)
-	}
-	if _, err = svc.AddPeer(user.ID.String(), AddPeerInput{
-		InterfaceID: iface.ID,
-		AllowedIPs:  []string{"10.0.0.5/32"},
-	}); err != nil {
-		t.Fatalf("AddPeer: %v", err)
-	}
-	if cfg, ok := fa.get("wg0"); !ok || len(cfg.Peers) != 1 {
-		t.Fatalf("agent did not receive peer via interface push: %+v, ok=%v", cfg, ok)
-	}
-
-	ifaceAfterAdd, err := svc.GetInterface(srv.ID.String(), iface.ID.String())
-	if err != nil {
-		t.Fatalf("GetInterface: %v", err)
-	}
-	if !ifaceAfterAdd.InSync || len(ifaceAfterAdd.Peers) != 1 {
-		t.Fatalf("expected interface InSync with 1 peer after AddPeer, got %+v", ifaceAfterAdd)
-	}
-
-	// DeletePeer: removing the peer should also re-push.
-	pubKey := mustParseKey(t, ifaceAfterAdd.Peers[0].Key)
-	if _, err = svc.DeletePeer(user.ID.String(), pubKey); err != nil {
-		t.Fatalf("DeletePeer: %v", err)
-	}
-	if cfg, ok := fa.get("wg0"); !ok || len(cfg.Peers) != 0 {
-		t.Fatalf("agent still has peer after DeletePeer: %+v, ok=%v", cfg, ok)
-	}
-
-	// DeleteInterface: should tell the agent to tear it down too.
-	if err = svc.DeleteInterface(srv.ID.String(), iface.ID.String()); err != nil {
-		t.Fatalf("DeleteInterface: %v", err)
-	}
-	if _, ok := fa.get("wg0"); ok {
-		t.Fatal("agent still has interface after DeleteInterface")
-	}
+	return svc, server, agent
 }
 
-func TestDeleteInterfaceCascadesPeers(t *testing.T) {
-	ts, tlsMaterial, fa := newFakeAgentTLS(t)
-	defer ts.Close()
-
-	svc := newTestService(t)
-
-	srv, err := svc.CreateServer(ServerInput{
-		Name:  "srv1",
-		SSH:   models.SSHConfig{Host: "example.invalid", User: "root", Password: "x"},
-		Agent: models.Agent{Address: ts.Listener.Addr().String(), TLS: tlsMaterial},
-	})
-	if err != nil {
-		t.Fatalf("CreateServer: %v", err)
-	}
-
-	iface, err := svc.CreateInterface(srv.ID.String(), awgmodels.InterfaceConfig{
-		Interface: "wg0", Address: "10.0.0.1/24", ListenPort: 51820,
-	})
-	if err != nil {
-		t.Fatalf("CreateInterface: %v", err)
-	}
-
-	user, err := svc.CreateUser(UserInput{Name: "u1"})
-	if err != nil {
-		t.Fatalf("CreateUser: %v", err)
-	}
-	for _, ip := range []string{"10.0.0.5/32", "10.0.0.6/32"} {
-		if _, err = svc.AddPeer(user.ID.String(), AddPeerInput{InterfaceID: iface.ID, AllowedIPs: []string{ip}}); err != nil {
-			t.Fatalf("AddPeer(%s): %v", ip, err)
-		}
-	}
-
-	peers, err := svc.ListPeers(user.ID.String())
-	if err != nil {
-		t.Fatalf("ListPeers: %v", err)
-	}
-	if len(peers) != 2 {
-		t.Fatalf("expected 2 peers before delete, got %d", len(peers))
-	}
-
-	if err = svc.DeleteInterface(srv.ID.String(), iface.ID.String()); err != nil {
-		t.Fatalf("DeleteInterface: %v", err)
-	}
-
-	// The interface's peers must be removed from the user's records too, not
-	// left orphaned — orphaned peer records are what kept them showing in the
-	// peer metrics after the interface was gone.
-	peers, err = svc.ListPeers(user.ID.String())
-	if err != nil {
-		t.Fatalf("ListPeers after delete: %v", err)
-	}
-	if len(peers) != 0 {
-		t.Fatalf("expected 0 peers after interface delete, got %d: %+v", len(peers), peers)
-	}
-
-	if _, ok := fa.get("wg0"); ok {
-		t.Fatal("agent still has interface after DeleteInterface")
-	}
-}
-
-// TestRenameInterfaceDeletesOldNameOnAgent guards the fix for the duplicated
-// per-peer metrics after an interface rename: the agent keys everything
-// (link, stored config, metrics) by interface name, so renaming must tear the
-// OLD name down on the agent, not just push the new one — otherwise the stale
-// interface lingers and every peer is sampled twice (once per name).
-func TestRenameInterfaceDeletesOldNameOnAgent(t *testing.T) {
-	ts, tlsMaterial, fa := newFakeAgentTLS(t)
-	defer ts.Close()
-
-	svc := newTestService(t)
-
-	srv, err := svc.CreateServer(ServerInput{
-		Name:  "srv1",
-		SSH:   models.SSHConfig{Host: "example.invalid", User: "root", Password: "x"},
-		Agent: models.Agent{Address: ts.Listener.Addr().String(), TLS: tlsMaterial},
-	})
-	if err != nil {
-		t.Fatalf("CreateServer: %v", err)
-	}
-
-	iface, err := svc.CreateInterface(srv.ID.String(), awgmodels.InterfaceConfig{
-		Interface: "wg0", Address: "10.0.0.1/24", ListenPort: 51820,
-	})
-	if err != nil {
-		t.Fatalf("CreateInterface: %v", err)
-	}
-	if _, ok := fa.get("wg0"); !ok {
-		t.Fatal("agent did not receive the created interface")
-	}
-
-	// Rename wg0 -> awg0 (keeping the same UUID, address and port).
-	if _, err = svc.UpdateInterfaceConfig(srv.ID.String(), iface.ID.String(), awgmodels.InterfaceConfig{
-		Interface: "awg0", Address: "10.0.0.1/24", ListenPort: 51820,
-	}); err != nil {
-		t.Fatalf("UpdateInterfaceConfig (rename): %v", err)
-	}
-
-	if _, ok := fa.get("awg0"); !ok {
-		t.Fatal("agent did not receive the renamed interface")
-	}
-	if _, ok := fa.get("wg0"); ok {
-		t.Fatal("agent still has the OLD interface name after rename — its peers would be double-counted in metrics")
-	}
-}
-
-func TestSyncServerResendsAllInterfaces(t *testing.T) {
-	ts, tlsMaterial, fa := newFakeAgentTLS(t)
-	defer ts.Close()
-
-	svc := newTestService(t)
-
-	srv, err := svc.CreateServer(ServerInput{
-		Name: "srv1",
-		SSH:  models.SSHConfig{Host: "example.invalid", User: "root", Password: "x"},
-		Agent: models.Agent{
-			Address: ts.Listener.Addr().String(),
-			TLS:     tlsMaterial,
-		},
-	})
-	if err != nil {
-		t.Fatalf("CreateServer: %v", err)
-	}
-
-	// Distinct name/port/subnet per interface — two on one server can't share a
-	// listen port or an overlapping subnet (see validateInterfaceUnique).
-	ifaceCfgs := []awgmodels.InterfaceConfig{
-		{Interface: "wg0", Address: "10.0.0.1/24", ListenPort: 51820},
-		{Interface: "wg1", Address: "10.0.1.1/24", ListenPort: 51821},
-	}
-	for _, cfg := range ifaceCfgs {
-		if _, err = svc.CreateInterface(srv.ID.String(), cfg); err != nil {
-			t.Fatalf("CreateInterface(%s): %v", cfg.Interface, err)
-		}
-	}
-
-	// Simulate the agent having lost its state (e.g. redeployed) and
-	// confirm SyncServer catches it back up.
-	fa.clear()
-	if err = svc.SyncServer(srv.ID.String()); err != nil {
-		t.Fatalf("SyncServer: %v", err)
-	}
-
-	for _, name := range []string{"wg0", "wg1"} {
-		if _, ok := fa.get(name); !ok {
-			t.Fatalf("SyncServer did not push interface %q", name)
-		}
-	}
-}
-
-func TestSyncServerDoesNotPruneProviderOnlyPeer(t *testing.T) {
+func TestSyncReportsRemoteOnlyWithoutAdopting(t *testing.T) {
 	svc, server, agent := newTestServerWithAgent(t)
-	agent.mu.Lock()
 	agent.awg = true
-	agent.mu.Unlock()
-	iface, err := svc.CreateInterface(server.ID.String(), awgmodels.InterfaceConfig{
-		Interface: "awg0", Address: "10.0.0.10/24", ListenPort: 51820,
-	})
-	if err != nil {
-		t.Fatalf("CreateInterface: %v", err)
+	interfaceResource := models.Resource{ID: uuid.New().String(), ServerID: server.ID.String(), APIVersion: "awg.ks-tool.dev/v1", Kind: "Interface", Name: "awg0", Spec: json.RawMessage(`{"iface":"awg0"}`)}
+	peerResource := models.Resource{ID: uuid.New().String(), ServerID: server.ID.String(), APIVersion: "awg.ks-tool.dev/v1", Kind: "Peer", Name: "alice", Spec: json.RawMessage(`{"interfaceRef":"` + interfaceResource.ID + `"}`)}
+	for _, resource := range []models.Resource{peerResource, interfaceResource} {
+		if err := svc.saveProviderResource(server.ID.String(), resource); err != nil {
+			t.Fatal(err)
+		}
 	}
-	peerKey, err := awgmodels.GeneratePrivateKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	publicKey := peerKey.PublicKey()
-	iface.Peers = []awgmodels.InterfacePeer{{
-		Key: publicKey, AllowedIPs: []string{"10.0.0.2/32"},
-	}}
-	if err := svc.store.Servers().Interfaces(server.ID).Set(iface); err != nil {
-		t.Fatal(err)
-	}
-	peerResource := models.Resource{
-		ID: publicKey.String(), ServerID: server.ID.String(), APIVersion: "awg.ks-tool.dev/v1",
-		Kind: "Peer", Name: "provider-only", Generation: 1,
-		Spec: json.RawMessage(fmt.Sprintf(`{"name":"provider-only","interfaceRef":%q,"publicKey":%q,"allowedIPs":["10.0.0.2/32"]}`, iface.ID.String(), publicKey.String())),
-	}
-	if err := svc.store.Resources(server.ID).Set(&peerResource); err != nil {
-		t.Fatal(err)
-	}
-	agent.mu.Lock()
-	agent.resources["Peer/"+peerResource.Name] = peerResource
-	agent.mu.Unlock()
-
 	if err := svc.SyncServer(server.ID.String()); err != nil {
-		t.Fatalf("SyncServer: %v", err)
+		t.Fatal(err)
 	}
-
+	remoteOnly := models.Resource{ID: uuid.New().String(), ServerID: server.ID.String(), APIVersion: "awg.ks-tool.dev/v1", Kind: "Peer", Name: "remote-only", Generation: 1, Spec: json.RawMessage(`{"interfaceRef":"` + interfaceResource.ID + `"}`), Status: models.ResourceStatus{ObservedGeneration: 1, Phase: models.ResourceReady}}
 	agent.mu.Lock()
-	_, remoteExists := agent.resources["Peer/"+peerResource.Name]
+	agent.resources["Peer/remote-only"] = remoteOnly
 	agent.mu.Unlock()
-	if !remoteExists {
-		t.Fatal("SyncServer deleted a provider peer missing from the legacy user model")
+	if err := svc.SyncServer(server.ID.String()); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := svc.store.Resources(server.ID).Get(peerResource.ID); err != nil {
-		t.Fatalf("provider peer disappeared from local resources: %v", err)
+	if _, err := svc.store.Resources(server.ID).Get(remoteOnly.ID); !storage.IsNotFound(err) {
+		t.Fatalf("provider-only peer was silently adopted: %v", err)
 	}
-	stored, err := svc.store.Servers().Interfaces(server.ID).Get(iface.ID)
+	listed, err := svc.ListProviderResources(server.ID.String(), "awg")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stored.Peers) != 1 || stored.Peers[0].Key != publicKey {
-		t.Fatalf("interface peer changed during sync: %+v", stored.Peers)
+	foundDrift := false
+	for _, item := range listed {
+		if item.ID == remoteOnly.ID {
+			foundDrift = true
+		}
 	}
-}
-
-func TestPushRecordsFailureWhenAgentUnreachable(t *testing.T) {
-	svc := newTestService(t)
-
-	srv, err := svc.CreateServer(ServerInput{
-		Name: "srv1",
-		// Port 1 on loopback: nothing listens there, so the dial fails
-		// immediately (connection refused) without any real network or
-		// DNS dependency — no tunnel ends up open for this server.
-		SSH: models.SSHConfig{Host: "127.0.0.1", Port: 1, User: "root", Password: "x"},
-		Agent: models.Agent{
-			Address: "127.0.0.1:1",
-		},
-	})
-	if err != nil {
-		t.Fatalf("CreateServer: %v", err)
+	if !foundDrift {
+		t.Fatal("remote-only drift was not reported")
 	}
-
-	iface, err := svc.CreateInterface(srv.ID.String(), awgmodels.InterfaceConfig{
-		Interface: "wg0", Address: "10.0.0.1/24", ListenPort: 51820,
-	})
-	if err != nil {
-		t.Fatalf("CreateInterface: %v", err)
+	if err := svc.DeleteProviderResource(server.ID.String(), "awg", "Peer", peerResource.Name); err != nil {
+		t.Fatal(err)
 	}
-
-	if iface.InSync {
-		t.Fatal("expected InSync=false when no tunnel/agent is reachable")
-	}
-	if iface.LastSyncError == "" {
-		t.Fatal("expected LastSyncError to be set when push fails")
-	}
-}
-
-func TestForceReplaceInterfacePeersTargetsOnlySelectedInterface(t *testing.T) {
-	ts, tlsMaterial, fa := newFakeAgentTLS(t)
-	defer ts.Close()
-
-	svc := newTestService(t)
-	srv, err := svc.CreateServer(ServerInput{
-		Name: "srv1",
-		SSH:  models.SSHConfig{Host: "example.invalid", User: "root", Password: "x"},
-		Agent: models.Agent{
-			Address: ts.Listener.Addr().String(),
-			TLS:     tlsMaterial,
-		},
-	})
-	if err != nil {
-		t.Fatalf("CreateServer: %v", err)
-	}
-	iface0, err := svc.CreateInterface(srv.ID.String(), awgmodels.InterfaceConfig{
-		Interface: "wg0", Address: "10.0.0.1/24", ListenPort: 51820,
-	})
-	if err != nil {
-		t.Fatalf("CreateInterface(wg0): %v", err)
-	}
-	if _, err := svc.CreateInterface(srv.ID.String(), awgmodels.InterfaceConfig{
-		Interface: "wg1", Address: "10.0.1.1/24", ListenPort: 51821,
-	}); err != nil {
-		t.Fatalf("CreateInterface(wg1): %v", err)
-	}
-
-	if err := svc.ForceReplaceInterfacePeers(srv.ID.String(), iface0.ID.String()); err != nil {
-		t.Fatalf("ForceReplaceInterfacePeers: %v", err)
-	}
-	if !fa.replacedPeers("wg0") {
-		t.Fatal("selected interface was not sent with replacePeers=true")
-	}
-	if fa.replacedPeers("wg1") {
-		t.Fatal("unselected interface was sent with replacePeers=true")
+	agent.mu.Lock()
+	_, exists := agent.resources["Peer/"+peerResource.Name]
+	_, remoteExists := agent.resources["Peer/remote-only"]
+	agent.mu.Unlock()
+	if exists || !remoteExists {
+		t.Fatalf("explicit deletion removed wrong peers: deleted=%v remote=%v", exists, remoteExists)
 	}
 }

@@ -106,3 +106,21 @@ func TestConfigureAgentDeploymentRejectsInvalidSettings(t *testing.T) {
 		t.Fatalf("invalid settings changed the stored address: %q", stored.Agent.Address)
 	}
 }
+
+func TestAgentInstallStateIsPersisted(t *testing.T) {
+	svc := newTestService(t)
+	server, err := svc.CreateServer(ServerInput{Name: "srv1", SSH: models.SSHConfig{Host: "192.0.2.10", User: "root", Password: "secret"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.Agent.Installed {
+		t.Fatal("new server is marked as installed")
+	}
+	if err := svc.markAgentInstalled(server); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := svc.store.Servers().Get(server.ID)
+	if err != nil || !stored.Agent.Installed {
+		t.Fatalf("agent installation was not persisted: %+v, %v", stored, err)
+	}
+}

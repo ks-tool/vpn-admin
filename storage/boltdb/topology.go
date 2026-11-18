@@ -19,28 +19,18 @@ package boltdb
 import (
 	"github.com/ks-tool/vpn-admin/models"
 	"github.com/ks-tool/vpn-admin/storage"
-
 	bolt "go.etcd.io/bbolt"
 )
 
 var topologyRecordKey = []byte("main")
 
 func emptyTopology() *models.Topology {
-	return &models.Topology{
-		Servers:     make([]models.TopologyServer, 0),
-		Interfaces:  make([]models.NetworkInterface, 0),
-		Services:    make([]models.VPNService, 0),
-		Connections: make([]models.NetworkConnection, 0),
-	}
+	return &models.Topology{Servers: make([]models.TopologyServer, 0), Interfaces: make([]models.NetworkInterface, 0)}
 }
 
-func (db *BoltDB) Topology() storage.Topology {
-	return &topology{db: db.db}
-}
+func (db *BoltDB) Topology() storage.Topology { return &topology{db: db.db} }
 
-type topology struct {
-	db *bolt.DB
-}
+type topology struct{ db *bolt.DB }
 
 func (t *topology) Get() (*models.Topology, error) {
 	result := emptyTopology()
@@ -60,18 +50,12 @@ func (t *topology) Get() (*models.Topology, error) {
 	return result, nil
 }
 
-func normalizeTopology(t *models.Topology) {
-	if t.Servers == nil {
-		t.Servers = make([]models.TopologyServer, 0)
+func normalizeTopology(topology *models.Topology) {
+	if topology.Servers == nil {
+		topology.Servers = make([]models.TopologyServer, 0)
 	}
-	if t.Interfaces == nil {
-		t.Interfaces = make([]models.NetworkInterface, 0)
-	}
-	if t.Services == nil {
-		t.Services = make([]models.VPNService, 0)
-	}
-	if t.Connections == nil {
-		t.Connections = make([]models.NetworkConnection, 0)
+	if topology.Interfaces == nil {
+		topology.Interfaces = make([]models.NetworkInterface, 0)
 	}
 }
 

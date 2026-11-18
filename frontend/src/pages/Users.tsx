@@ -22,7 +22,7 @@ import { useNavigation } from '@/contexts/NavigationContext'
 
 export default function Users() {
     const { t } = useTranslation()
-    const { users, isLoadingUsers, setSelectedUser } = useAppStore()
+    const { users, resources, isLoadingUsers, setSelectedUser } = useAppStore()
     const { navigate } = useNavigation()
 
     const handleSelectUser = (userId: string) => {
@@ -92,7 +92,7 @@ export default function Users() {
                                                 </div>
                                             </td>
                                             <td className="px-5 py-3 text-center font-mono text-muted-foreground dark:text-zinc-400">
-                                                {user.peers?.length || 0}
+                                                {resources.filter(resource => resource.kind === 'Peer' && resource.spec.userRef === user.id).length}
                                             </td>
                                             <td className="px-5 py-3 text-xs text-zinc-600 max-w-xs truncate">
                                                 {user.description || '—'}

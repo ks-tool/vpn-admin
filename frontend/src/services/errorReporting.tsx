@@ -15,6 +15,15 @@
  */
 
 import {toast} from 'sonner';
+import * as AppBindings from '../../wailsjs/go/main/App';
+import {getCurrentApiMode} from './apiMode';
+
+export function logError(message: string, error: string): void {
+    console.error(message, error);
+    if (getCurrentApiMode() === 'bindings') {
+        void AppBindings.LogFrontend('error', `${message}: ${error}`).catch(() => undefined);
+    }
+}
 
 /**
  * Logs and surfaces a backend/agent read failure (list/get calls) to the
@@ -27,6 +36,6 @@ import {toast} from 'sonner';
  * of stacking a new one on every tick.
  */
 export function reportError(id: string, message: string, error: string): void {
-    console.error(message, error);
+    logError(message, error);
     toast.error(`${message}: ${error}`, {id});
 }

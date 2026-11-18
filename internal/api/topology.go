@@ -21,7 +21,6 @@ import (
 
 	"github.com/ks-tool/vpn-admin/internal/service"
 	"github.com/ks-tool/vpn-admin/models"
-
 	"github.com/uptrace/bunrouter"
 )
 
@@ -43,27 +42,6 @@ func (h *Handler) topologyTunnelMetrics(w http.ResponseWriter, r bunrouter.Reque
 		return handleErr(err, topologyFields(r))
 	}
 	return bunrouter.JSON(w, metrics)
-}
-
-func (h *Handler) topologyPluginList(w http.ResponseWriter, r bunrouter.Request) error {
-	plugins, err := h.svc.ListVPNPlugins()
-	if err != nil {
-		return handleErr(err, topologyFields(r))
-	}
-	return bunrouter.JSON(w, plugins)
-}
-
-func (h *Handler) topologyServerCreate(w http.ResponseWriter, r bunrouter.Request) error {
-	var input service.TopologyServerInput
-	if err := decode(r, &input); err != nil {
-		return badRequest(err)
-	}
-	topology, err := h.svc.CreateTopologyServer(input)
-	if err != nil {
-		return handleErr(err, topologyFields(r))
-	}
-	w.WriteHeader(http.StatusCreated)
-	return bunrouter.JSON(w, topology)
 }
 
 func (h *Handler) topologyServerUpdate(w http.ResponseWriter, r bunrouter.Request) error {
@@ -119,94 +97,6 @@ func (h *Handler) topologyInterfaceDelete(w http.ResponseWriter, r bunrouter.Req
 	return nil
 }
 
-func (h *Handler) topologyServiceCreate(w http.ResponseWriter, r bunrouter.Request) error {
-	var input service.VPNServiceInput
-	if err := decode(r, &input); err != nil {
-		return badRequest(err)
-	}
-	result, err := h.svc.CreateVPNService(input)
-	if err != nil {
-		return handleErr(err, topologyFields(r))
-	}
-	w.WriteHeader(http.StatusCreated)
-	return bunrouter.JSON(w, result)
-}
-
-func (h *Handler) topologyServiceUpdate(w http.ResponseWriter, r bunrouter.Request) error {
-	var input service.VPNServiceInput
-	if err := decode(r, &input); err != nil {
-		return badRequest(err)
-	}
-	result, err := h.svc.UpdateVPNService(r.Param("serviceID"), input)
-	if err != nil {
-		return handleErr(err, topologyFields(r))
-	}
-	return bunrouter.JSON(w, result)
-}
-
-func (h *Handler) topologyServiceDelete(w http.ResponseWriter, r bunrouter.Request) error {
-	if err := h.svc.DeleteVPNService(r.Param("serviceID")); err != nil {
-		return handleErr(err, topologyFields(r))
-	}
-	w.WriteHeader(http.StatusNoContent)
-	return nil
-}
-
-func (h *Handler) topologyServiceApply(w http.ResponseWriter, r bunrouter.Request) error {
-	result, err := h.svc.ApplyVPNService(r.Param("serviceID"))
-	if err != nil {
-		return handleErr(err, topologyFields(r))
-	}
-	return bunrouter.JSON(w, result)
-}
-
-func (h *Handler) topologyServiceStatus(w http.ResponseWriter, r bunrouter.Request) error {
-	result, err := h.svc.RefreshVPNServiceStatus(r.Param("serviceID"))
-	if err != nil {
-		return handleErr(err, topologyFields(r))
-	}
-	return bunrouter.JSON(w, result)
-}
-
-func (h *Handler) topologyConnectionCreate(w http.ResponseWriter, r bunrouter.Request) error {
-	var input struct {
-		SourceID string `json:"sourceId"`
-		TargetID string `json:"targetId"`
-	}
-	if err := decode(r, &input); err != nil {
-		return badRequest(err)
-	}
-	result, err := h.svc.CreateNetworkConnection(input.SourceID, input.TargetID)
-	if err != nil {
-		return handleErr(err, topologyFields(r))
-	}
-	w.WriteHeader(http.StatusCreated)
-	return bunrouter.JSON(w, result)
-}
-
-func (h *Handler) topologyConnectionMove(w http.ResponseWriter, r bunrouter.Request) error {
-	var input struct {
-		SourceID string `json:"sourceId"`
-		TargetID string `json:"targetId"`
-	}
-	if err := decode(r, &input); err != nil {
-		return badRequest(err)
-	}
-	result, err := h.svc.MoveNetworkConnection(r.Param("connectionID"), input.SourceID, input.TargetID)
-	if err != nil {
-		return handleErr(err, topologyFields(r))
-	}
-	return bunrouter.JSON(w, result)
-}
-
-func (h *Handler) topologyConnectionDelete(w http.ResponseWriter, r bunrouter.Request) error {
-	if err := h.svc.DeleteNetworkConnection(r.Param("connectionID")); err != nil {
-		return handleErr(err, topologyFields(r))
-	}
-	w.WriteHeader(http.StatusNoContent)
-	return nil
-}
-
 func (h *Handler) topologyPositionsUpdate(w http.ResponseWriter, r bunrouter.Request) error {
 	var input struct {
 		Positions []models.NodePosition `json:"positions"`
@@ -215,47 +105,6 @@ func (h *Handler) topologyPositionsUpdate(w http.ResponseWriter, r bunrouter.Req
 		return badRequest(err)
 	}
 	if err := h.svc.MoveTopologyNodes(input.Positions); err != nil {
-		return handleErr(err, topologyFields(r))
-	}
-	w.WriteHeader(http.StatusNoContent)
-	return nil
-}
-
-func (h *Handler) topologyUserList(w http.ResponseWriter, r bunrouter.Request) error {
-	users, err := h.svc.ListVPNServiceUsers(r.Param("serviceID"))
-	if err != nil {
-		return handleErr(err, topologyFields(r))
-	}
-	return bunrouter.JSON(w, users)
-}
-
-func (h *Handler) topologyUserCreate(w http.ResponseWriter, r bunrouter.Request) error {
-	var input map[string]any
-	if err := decode(r, &input); err != nil {
-		return badRequest(err)
-	}
-	user, err := h.svc.CreateVPNServiceUser(r.Param("serviceID"), input)
-	if err != nil {
-		return handleErr(err, topologyFields(r))
-	}
-	w.WriteHeader(http.StatusCreated)
-	return bunrouter.JSON(w, user)
-}
-
-func (h *Handler) topologyUserUpdate(w http.ResponseWriter, r bunrouter.Request) error {
-	var input map[string]any
-	if err := decode(r, &input); err != nil {
-		return badRequest(err)
-	}
-	user, err := h.svc.UpdateVPNServiceUser(r.Param("serviceID"), r.Param("userID"), input)
-	if err != nil {
-		return handleErr(err, topologyFields(r))
-	}
-	return bunrouter.JSON(w, user)
-}
-
-func (h *Handler) topologyUserDelete(w http.ResponseWriter, r bunrouter.Request) error {
-	if err := h.svc.DeleteVPNServiceUser(r.Param("serviceID"), r.Param("userID")); err != nil {
 		return handleErr(err, topologyFields(r))
 	}
 	w.WriteHeader(http.StatusNoContent)

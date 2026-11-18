@@ -36,7 +36,7 @@ var systemdUnit []byte
 const (
 	remoteBinPath  = "/usr/local/bin/vpn-agent"
 	remoteUnitPath = "/etc/systemd/system/vpn-agent.service"
-	remoteEnvPath  = "/etc/vpn-agent/vpn-agent.env"
+	remoteEnvPath  = "/var/lib/vpn-agent/vpn-agent.env"
 	remoteDBPath   = "/var/lib/vpn-agent"
 )
 

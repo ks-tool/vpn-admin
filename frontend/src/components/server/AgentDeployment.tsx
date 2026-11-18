@@ -78,11 +78,12 @@ export function AgentDeployment({server, onChanged, onBusyChange}: {
 
     useEffect(() => {
         const timeout = window.setTimeout(() => {
-            void loadManifest();
+            if (server.agent.installed) void loadManifest();
+            else setManifest(null);
             void loadHostInfo();
         }, 0);
         return () => window.clearTimeout(timeout);
-    }, [loadHostInfo, loadManifest]);
+    }, [loadHostInfo, loadManifest, server.agent.installed]);
 
     useEffect(() => {
         onBusyChange(busy);

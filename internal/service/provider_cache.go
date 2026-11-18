@@ -106,6 +106,9 @@ func (s *Service) cachedProviderManifest(serverID string) (*models.Manifest, err
 	}
 	manifest := &models.Manifest{ProtocolVersion: models.ProtocolVersion, Providers: make([]models.ProviderDefinition, 0, len(records))}
 	for _, record := range records {
+		if !record.Installed {
+			continue
+		}
 		provider := record.Definition
 		sort.Slice(provider.Resources, func(i, j int) bool { return provider.Resources[i].Kind < provider.Resources[j].Kind })
 		manifest.Providers = append(manifest.Providers, provider)
@@ -122,7 +125,7 @@ func (s *Service) cacheServerProviderManifest(serverID string, manifest *models.
 	desired := make(map[string]bool, len(manifest.Providers))
 	for _, provider := range manifest.Providers {
 		desired[provider.Name] = true
-		if err := s.store.Providers().Set(&models.ProviderRecord{ServerID: serverID, Definition: provider}); err != nil {
+		if err := s.store.Providers().Set(&models.ProviderRecord{ServerID: serverID, Definition: provider, Installed: true}); err != nil {
 			return err
 		}
 	}
@@ -134,7 +137,8 @@ func (s *Service) cacheServerProviderManifest(serverID string, manifest *models.
 		if desired[record.Definition.Name] {
 			continue
 		}
-		if err := s.store.Providers().Delete(id, record.Definition.Name); err != nil && !storage.IsNotFound(err) {
+		record.Installed = false
+		if err := s.store.Providers().Set(&record); err != nil {
 			return err
 		}
 	}
@@ -142,11 +146,15 @@ func (s *Service) cacheServerProviderManifest(serverID string, manifest *models.
 }
 
 func (s *Service) removeCachedProvider(serverID uuid.UUID, name string) error {
-	err := s.store.Providers().Delete(serverID, name)
+	record, err := s.store.Providers().Get(serverID, name)
 	if storage.IsNotFound(err) {
 		return nil
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	record.Installed = false
+	return s.store.Providers().Set(record)
 }
 
 func (s *Service) fetchProviderManifest(serverID string) (*models.Manifest, error) {

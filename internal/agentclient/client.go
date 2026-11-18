@@ -28,18 +28,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 
 	awgmodels "github.com/ks-tool/vpn-agent/v2/providers/awg/models"
 
-	"github.com/ks-tool/vpn-admin/models"
 	agentmodels "github.com/ks-tool/vpn-agent/v2/models"
 )
 
-// NotFoundError is returned by Get/Delete when the agent has no interface
-// with the given name (agent storage.NotFound, mapped to HTTP 404 by the
-// agent's handlers).
+// NotFoundError reports that the AWG provider has no metrics for the interface.
 type NotFoundError struct {
 	Interface string
 }
@@ -59,173 +55,6 @@ type Client struct {
 // "https://<agent-addr>" for direct mTLS).
 func New(httpClient *http.Client, baseURL string) *Client {
 	return &Client{httpClient: httpClient, baseURL: strings.TrimSuffix(baseURL, "/")}
-}
-
-// Set applies cfg to the agent's interface of the same name, creating it if
-// it doesn't already exist (PUT /interfaces).
-func (c *Client) Set(ctx context.Context, cfg awgmodels.InterfaceConfig) error {
-	return c.set(ctx, cfg, false)
-}
-
-// SetForceReplacePeers applies cfg with the agent's full peer replacement
-// behavior. Unlike Set, this intentionally tears down all live peer sessions
-// on the interface before recreating its peer set.
-func (c *Client) SetForceReplacePeers(ctx context.Context, cfg awgmodels.InterfaceConfig) error {
-	return c.set(ctx, cfg, true)
-}
-
-func (c *Client) set(ctx context.Context, cfg awgmodels.InterfaceConfig, replacePeers bool) error {
-	body, err := json.Marshal(cfg)
-	if err != nil {
-		return fmt.Errorf("marshal interface config: %w", err)
-	}
-
-	url := c.baseURL + "/interfaces"
-	if replacePeers {
-		url += "?replacePeers=true"
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	markIdempotent(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("PUT /interfaces: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusCreated {
-		return responseError(resp, cfg.Interface)
-	}
-	return nil
-}
-
-// Get fetches the current config of the named interface (GET /interfaces/{name}).
-func (c *Client) Get(ctx context.Context, name string) (*awgmodels.InterfaceConfig, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/interfaces/"+name, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("GET /interfaces/%s: %w", name, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, responseError(resp, name)
-	}
-
-	var cfg awgmodels.InterfaceConfig
-	if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil {
-		return nil, fmt.Errorf("decode interface config: %w", err)
-	}
-	return &cfg, nil
-}
-
-// List fetches every interface configured on the agent (GET /interfaces/).
-func (c *Client) List(ctx context.Context) ([]awgmodels.InterfaceConfig, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/interfaces/", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("GET /interfaces/: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, responseError(resp, "")
-	}
-
-	var cfgs []awgmodels.InterfaceConfig
-	if err := json.NewDecoder(resp.Body).Decode(&cfgs); err != nil {
-		return nil, fmt.Errorf("decode interface list: %w", err)
-	}
-	return cfgs, nil
-}
-
-// ListUnmanaged fetches the live WireGuard/AmneziaWG devices on the agent's
-// host that it has no stored config for — interfaces brought up outside the
-// agent, e.g. by wg-quick/awg-quick before it was installed (GET
-// /interfaces/unmanaged). Each carries the link kind (amneziawg/wireguard). An
-// agent predating the endpoint answers 404 (surfaced as *NotFoundError), which
-// callers treat as "unknown". Decoded into the root models' twin of the agent
-// type so the admin builds against the published agent module.
-func (c *Client) ListUnmanaged(ctx context.Context) ([]models.UnmanagedInterface, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/interfaces/unmanaged", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("GET /interfaces/unmanaged: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, responseError(resp, "")
-	}
-
-	var list []models.UnmanagedInterface
-	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
-		return nil, fmt.Errorf("decode unmanaged interface list: %w", err)
-	}
-	return list, nil
-}
-
-// ImportSource fetches the wg-quick/awg-quick conf file the agent's host has
-// for the named interface (GET /interfaces/{name}/import-source) — the raw
-// text plus the path it was found at. A *NotFoundError means the host has no
-// such conf (in either /etc/amnezia/amneziawg or /etc/wireguard).
-func (c *Client) ImportSource(ctx context.Context, name string) (*models.ImportSource, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/interfaces/"+name+"/import-source", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("GET /interfaces/%s/import-source: %w", name, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, responseError(resp, name)
-	}
-
-	var src models.ImportSource
-	if err := json.NewDecoder(resp.Body).Decode(&src); err != nil {
-		return nil, fmt.Errorf("decode import source: %w", err)
-	}
-	return &src, nil
-}
-
-// Delete removes the named interface from the agent (DELETE /interfaces/{name}).
-func (c *Client) Delete(ctx context.Context, name string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.baseURL+"/interfaces/"+name, nil)
-	if err != nil {
-		return err
-	}
-	markIdempotent(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("DELETE /interfaces/%s: %w", name, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusNoContent {
-		return responseError(resp, name)
-	}
-	return nil
 }
 
 // Info fetches the host facts the agent discovered at startup — its backend and
@@ -280,20 +109,30 @@ func (c *Client) Metrics(ctx context.Context) (*agentmodels.SystemSnapshot, erro
 
 // InterfaceMetrics fetches one interface's peer metrics and agent-measured p95 latency.
 func (c *Client) InterfaceMetrics(ctx context.Context, name string) (*awgmodels.InterfaceSnapshot, error) {
-	var snap awgmodels.InterfaceSnapshot
-	if err := c.interfaceMetricsGet(ctx, "/metrics/"+url.PathEscape(name), &snap); err != nil {
+	var snapshot awgmodels.MetricsSnapshot
+	if err := c.interfaceMetricsGet(ctx, "/v2/providers/awg/bridge/metrics", &snapshot); err != nil {
 		return nil, err
 	}
-	return &snap, nil
+	for index := range snapshot.Interfaces {
+		if snapshot.Interfaces[index].Interface == name {
+			return &snapshot.Interfaces[index], nil
+		}
+	}
+	return nil, &NotFoundError{Interface: name}
 }
 
 // InterfaceMetricsHistory fetches one interface's retained peer history.
 func (c *Client) InterfaceMetricsHistory(ctx context.Context, name string) (*awgmodels.InterfaceHistory, error) {
-	var history awgmodels.InterfaceHistory
-	if err := c.interfaceMetricsGet(ctx, "/metrics/"+url.PathEscape(name)+"/history", &history); err != nil {
+	var history awgmodels.SystemHistory
+	if err := c.interfaceMetricsGet(ctx, "/v2/providers/awg/bridge/metrics/history", &history); err != nil {
 		return nil, err
 	}
-	return &history, nil
+	for index := range history.Interfaces {
+		if history.Interfaces[index].Interface == name {
+			return &history.Interfaces[index], nil
+		}
+	}
+	return nil, &NotFoundError{Interface: name}
 }
 
 func (c *Client) interfaceMetricsGet(ctx context.Context, path string, output any) error {
@@ -446,14 +285,11 @@ func (c *Client) Profile(ctx context.Context, name string, seconds int) ([]byte,
 // internal/sshclient.TunnelClient) connection it picked turned out to
 // already be dead — e.g. the agent process restarted, or the SSH session
 // was idle long enough to be dropped. Without this, that case surfaces as
-// a bare `PUT /interfaces: ... EOF` (or DELETE/PATCH equivalent): Go only
-// auto-retries GET/HEAD/OPTIONS/TRACE on a connection that turned out to
-// have zero bytes written to it; for any other method it requires an
-// explicit signal that resending is safe (see (*Request).isReplayable in
-// net/http, and the Transport doc comment on "Idempotency-Key"). PUT
-// /interfaces (full replace), DELETE /interfaces/{name}, and PATCH
-// /metrics are all genuinely idempotent — repeating the exact same request
-// has the same effect as sending it once — so this is safe here. The
+// a bare PUT/DELETE/PATCH EOF. Go only auto-retries safe HTTP methods on an
+// unused connection; other methods require an explicit replayability signal
+// (see (*Request).isReplayable and the Transport documentation). Resource
+// PUT/DELETE and settings PATCH operations are idempotent, so repeating the
+// exact same request is safe here. The
 // value is intentionally empty: the agent doesn't need to see it, and an
 // empty value tells Transport not to even put it on the wire (see the
 // same doc comment).
@@ -461,10 +297,20 @@ func markIdempotent(req *http.Request) {
 	req.Header.Set("Idempotency-Key", "")
 }
 
+type HTTPError struct {
+	StatusCode int
+	Status     string
+	Body       string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("agent returned %s: %s", e.Status, e.Body)
+}
+
 func responseError(resp *http.Response, name string) error {
 	if resp.StatusCode == http.StatusNotFound && len(name) > 0 {
 		return &NotFoundError{Interface: name}
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	return fmt.Errorf("agent returned %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	return &HTTPError{StatusCode: resp.StatusCode, Status: resp.Status, Body: strings.TrimSpace(string(body))}
 }

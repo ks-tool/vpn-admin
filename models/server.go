@@ -18,10 +18,7 @@ package models
 
 import (
 	"fmt"
-	"time"
 	"uuid"
-
-	awgmodels "github.com/ks-tool/vpn-agent/v2/providers/awg/models"
 )
 
 type Server struct {
@@ -32,7 +29,6 @@ type Server struct {
 	SSH   SSHConfig `json:"ssh"`
 	Agent Agent     `json:"agent"`
 
-	Interfaces []uuid.UUID `json:"interfaces,omitempty"`
 	// Unmanaged marks inventory migrated from v1 until a v2 agent with the
 	// required provider successfully adopts its resources.
 	Unmanaged bool `json:"unmanaged,omitempty"`
@@ -59,8 +55,9 @@ type SSHConfig struct {
 }
 
 type Agent struct {
-	Address string    `json:"addr"`
-	TLS     *AgentTLS `json:"tls,omitempty"`
+	Address   string    `json:"addr"`
+	TLS       *AgentTLS `json:"tls,omitempty"`
+	Installed bool      `json:"installed,omitempty"`
 
 	// MonitoringDisabled, when true, turns off the agent's CPU/RAM/network/
 	// peer metrics collection (see Service.SetServerMonitoring). Zero value
@@ -113,36 +110,6 @@ type CertKeyPair struct {
 
 func (t *AgentTLS) IsZero() bool {
 	return t == nil || len(t.CA.Certificate) == 0
-}
-
-type Interface struct {
-	ID uuid.UUID `json:"id"`
-
-	// json:",inline" flattens the fields under jsonv2 (this module builds with
-	// ), matching the YAML "inline" convention. tstype
-	// additionally tells tygo to emit "extends InterfaceConfig" on the
-	// generated TS type instead of a nested field — tygo only understands
-	// plain v1 json tag semantics and doesn't infer this on its own.
-	awgmodels.InterfaceConfig `json:",inline" tstype:",extends"`
-
-	Provider     string `json:"provider,omitempty"`
-	ResourceName string `json:"resourceName,omitempty"`
-
-	// Sync status of this interface's config against the agent. Updated
-	// after every push attempt (see internal/service's agent push wiring);
-	// not touched by the agent itself.
-	InSync        bool      `json:"inSync"`
-	LastSyncError string    `json:"lastSyncError,omitempty"`
-	LastSyncedAt  time.Time `json:"lastSyncedAt"`
-
-	// Tunnel groups the interfaces that together form one multi-hop tunnel
-	// (see Service.BuildTunnel / the tunnel wizard): every interface a tunnel
-	// is built from carries the same id, nil means "not part of any tunnel".
-	// Admin-only bookkeeping — never pushed to the agent (only the embedded
-	// InterfaceConfig is), not shown or editable in the UI. Its only visible
-	// effects: it blocks deleting the interface while the tunnel exists, and
-	// the dashboard counts distinct tunnel ids.
-	Tunnel *uuid.UUID `json:"tunnel,omitempty"`
 }
 
 func (cfg SSHConfig) IsZero() bool {

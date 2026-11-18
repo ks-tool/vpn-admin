@@ -561,7 +561,6 @@ groups:
 | `/links/*` | Provider links: list/create/apply/move/delete. |
 | `/artifacts/*`, `/registry-sources/*` | OCI tags, provider catalog and saved registries. |
 | `/users/*` | Global users and provider peers. |
-| `/tunnels/*` | Compatibility with the old two-node model; use Graph/links for new routes. |
 
 All operational routes except login/logout require a standalone session. Moving uses `PUT /links/:linkID` and
 `PUT /topology/connections/:connectionID`; plugin service creation uses `POST /topology/services`.

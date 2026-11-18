@@ -16,13 +16,9 @@
 
 import {Handle, Position, type Node, type NodeProps} from '@xyflow/react';
 import {Network} from 'lucide-react';
-import type {NetworkInterface, TopologyServer, VPNService} from '@/types';
+import type {NetworkInterface, TopologyServer} from '@/types';
 
-export type InterfaceFlowNode = Node<{
-    iface: NetworkInterface;
-    server?: TopologyServer;
-    service?: VPNService;
-}, 'interface'>;
+export type InterfaceFlowNode = Node<{iface: NetworkInterface; server?: TopologyServer}, 'interface'>;
 
 export function TopologyInterfaceNode({data, selected}: NodeProps<InterfaceFlowNode>) {
     return (
@@ -31,14 +27,11 @@ export function TopologyInterfaceNode({data, selected}: NodeProps<InterfaceFlowN
             <div className="flex items-center gap-3">
                 <div className="rounded-lg bg-violet-500/15 p-2 text-violet-600 dark:text-violet-400"><Network size={18} /></div>
                 <div className="min-w-0">
-                    <div className="truncate text-xs font-semibold">
-                        {data.server ? `${data.server.name}[${data.server.address || '—'}]` : '—'}
-                    </div>
+                    <div className="truncate text-xs font-semibold">{data.server ? `${data.server.name}[${data.server.address || '—'}]` : '—'}</div>
                     <div className="truncate font-mono text-sm font-semibold">{data.iface.name}</div>
                     <div className="truncate font-mono text-xs text-muted-foreground">{data.iface.address || '—'}</div>
                 </div>
             </div>
-            {data.service && <div className="mt-2 truncate text-xs text-sky-600 dark:text-sky-400">{data.service.name}</div>}
             <Handle type="source" position={Position.Right} className="h-3! w-3! border-2! border-background! bg-sky-500!" />
         </div>
     );

@@ -18,7 +18,7 @@ import {useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEv
 import {useTranslation} from 'react-i18next';
 import {GeoScatter, type GeoPoint} from '@zenith-visuals/maps';
 import {MapPin, MapPinned, RotateCcw, ZoomIn, ZoomOut} from 'lucide-react';
-import type {NetworkConnection, NetworkInterface, ProviderLink, TopologyServer, TunnelMetric, VPNService} from '@/types';
+import type {NetworkInterface, ProviderLink, TopologyServer, TunnelMetric} from '@/types';
 import type {AgentStatus} from '@/services/servers';
 import {centeredMapPan, clampMapPan, fitMapViewport} from './mapViewport';
 import {clusterTopologyServers, expandedClusterCoordinates} from './mapClusters';
@@ -39,17 +39,7 @@ const mapTheme = {
     typography: {fontFamily: 'var(--font-sans)'},
 };
 
-const serviceStatusColors = ['#ef4444', '#a1a1aa', '#f59e0b', '#22c55e'];
-
-function serviceStatusValue(status: string): number {
-    if (status === 'error') return 0;
-    if (status === 'running') return 3;
-    return 2;
-}
-
-function serviceStatusColor(status: string): string {
-    return serviceStatusColors[serviceStatusValue(status)];
-}
+const statusColors = ['#ef4444', '#a1a1aa', '#f59e0b', '#22c55e'];
 
 function agentStatusValue(status: AgentStatus): number {
     if (status === 'down') return 0;
@@ -61,8 +51,6 @@ function agentStatusValue(status: AgentStatus): number {
 interface TopologyMapProps {
     servers: TopologyServer[];
     interfaces: NetworkInterface[];
-    services: VPNService[];
-    connections: NetworkConnection[];
     links: ProviderLink[];
     agentStatuses: Record<string, AgentStatus | null>;
     tunnelMetrics: Record<string, TunnelMetric>;
@@ -70,7 +58,7 @@ interface TopologyMapProps {
     onSelect: (id: string) => void;
 }
 
-export function TopologyMap({servers, interfaces, services, connections, links, agentStatuses, tunnelMetrics, totalUsers, onSelect}: TopologyMapProps) {
+export function TopologyMap({servers, interfaces, links, agentStatuses, tunnelMetrics, totalUsers, onSelect}: TopologyMapProps) {
     const {t} = useTranslation();
     const containerRef = useRef<HTMLDivElement>(null);
     const [size, setSize] = useState({width: 0, height: 560});
@@ -151,15 +139,13 @@ export function TopologyMap({servers, interfaces, services, connections, links, 
     }), [expandedCoordinates, servers]);
     const points = useMemo<GeoPoint[]>(() => {
         const pointForServer = (server: TopologyServer, lat = server.latitude!, lon = server.longitude!): GeoPoint => {
-            const serverServices = services.filter(service => service.serverId === server.id);
             const agentStatus = agentStatuses[server.id];
-            const serviceValue = serverServices.length === 0 ? 1 : Math.min(...serverServices.map(service => serviceStatusValue(service.status)));
             return {
                 id: server.id,
                 label: server.name,
                 lat,
                 lon,
-                value: agentStatus ? agentStatusValue(agentStatus) : serviceValue,
+                value: agentStatus ? agentStatusValue(agentStatus) : 1,
             };
         };
         return clusters.flatMap(cluster => {
@@ -177,15 +163,15 @@ export function TopologyMap({servers, interfaces, services, connections, links, 
                 return pointForServer(server, coordinates?.lat, coordinates?.lon);
             })];
         });
-    }, [agentStatuses, clusters, expandedClusterKey, expandedCoordinates, services]);
+    }, [agentStatuses, clusters, expandedClusterKey, expandedCoordinates]);
     const presentStatuses = [...new Set(points.map(point => point.value ?? 1))].sort((a, b) => a - b);
     const pointTheme = {
         ...mapTheme,
         colors: {
             ...mapTheme.colors,
-            primary: presentStatuses.length === 1 ? serviceStatusColors[presentStatuses[0]] : mapTheme.colors.primary,
+            primary: presentStatuses.length === 1 ? statusColors[presentStatuses[0]] : mapTheme.colors.primary,
         },
-        sequential: presentStatuses.map(status => serviceStatusColors[status]),
+        sequential: presentStatuses.map(status => statusColors[status]),
     };
 
     return (
@@ -205,7 +191,7 @@ export function TopologyMap({servers, interfaces, services, connections, links, 
                 }}
             >
                 <WorldLand width={size.width} height={size.height} transform={transform} />
-                <TopologyTunnels servers={displayServers} interfaces={interfaces} connections={connections} links={links} metrics={tunnelMetrics} width={size.width} height={size.height} transform={transform} zoom={zoom} />
+                <TopologyTunnels servers={displayServers} interfaces={interfaces} links={links} metrics={tunnelMetrics} width={size.width} height={size.height} transform={transform} zoom={zoom} />
                 <GeoScatter
                     className="topology-scatter"
                     data={points}
@@ -239,7 +225,6 @@ export function TopologyMap({servers, interfaces, services, connections, links, 
                         );
                     }
                     const server = servers.find(item => item.id === point.id);
-                    const serverServices = services.filter(service => service.serverId === point.id);
                     const agentStatus = point.id ? agentStatuses[point.id] : null;
                     return (
                         <div>
@@ -249,19 +234,8 @@ export function TopologyMap({servers, interfaces, services, connections, links, 
                             <div className="mt-1 text-xs opacity-70">{point.lat.toFixed(4)}, {point.lon.toFixed(4)}</div>
                             {agentStatus && (
                                 <div className="mt-2 flex items-center gap-2 border-t border-border pt-2 text-xs">
-                                    <span className="h-2 w-2 rounded-full" style={{backgroundColor: serviceStatusColors[agentStatusValue(agentStatus)]}} />
+                                    <span className="h-2 w-2 rounded-full" style={{backgroundColor: statusColors[agentStatusValue(agentStatus)]}} />
                                     <span>{t(`status.${agentStatus}`)}</span>
-                                </div>
-                            )}
-                            {serverServices.length > 0 && (
-                                <div className="mt-2 space-y-1 border-t border-border pt-2">
-                                    {serverServices.map(service => (
-                                        <div key={service.id} className="flex items-center gap-2 text-xs">
-                                            <span className="h-2 w-2 shrink-0 rounded-full" style={{backgroundColor: serviceStatusColor(service.status)}} />
-                                            <span>{service.name}</span>
-                                            <span className="ml-auto pl-3 opacity-70">{t(`topology.status.${service.status}`, {defaultValue: service.status})}</span>
-                                        </div>
-                                    ))}
                                 </div>
                             )}
                         </div>

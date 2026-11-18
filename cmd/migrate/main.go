@@ -24,7 +24,7 @@ import (
 	"time"
 
 	appconfig "github.com/ks-tool/app-config/go"
-	"github.com/ks-tool/vpn-admin/storage/boltdb"
+	"github.com/ks-tool/vpn-admin/internal/migration"
 	"github.com/ks-tool/vpn-admin/storage/boltdb/dump"
 	"github.com/spf13/pflag"
 
@@ -34,16 +34,9 @@ import (
 // awg-migrate moves vpn-admin's data between two boltdb files — typically
 // the ~/.vpn-admin/db used by the Wails desktop app on one machine and the one
 // used by the standalone web server (cmd/vpn-admin.go) on another. Both
-// already share the exact same file format (same boltdb buckets, same JSON
-// value encoding — see storage/boltdb), so this tool doesn't need to know
-// anything about the application's schema (models.Server, models.User,
-// ...): it just copies every bucket's raw key/value pairs to/from a
-// JSON file, byte for byte. That also means it isn't tripped up by the
-// historical bktUsers/bktInterfaces bucket-name mismatch in
-// storage/boltdb/bbolt.go — it doesn't care what a bucket is named or what
-// its values mean, only that the source and destination are the same
-// vpn-admin version (the binary format of values is an internal,
-// undocumented implementation detail, not a stable cross-version contract).
+// already share the exact same file format. Export/import copies raw buckets;
+// the separate v2 command uses internal/migration to convert a v1 snapshot into
+// the resource-only schema without modifying its source.
 //
 // Usage:
 //
@@ -118,11 +111,21 @@ func runV2Cmd(args []string) {
 	}
 	cfg := v2Config{DB: filepath.Join(home, ".awg-admin"), Out: filepath.Join(home, ".vpn-admin", "db")}
 	parseCommandConfig("v2", &cfg, args)
-	if err := boltdb.MigrateV2(cfg.DB, cfg.Out, cfg.Force); err != nil {
+	warnings, err := migration.V2WithWarnings(cfg.DB, cfg.Out, cfg.Force)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "v2 migration failed:", err)
 		os.Exit(1)
 	}
+	for _, warning := range warnings {
+		fmt.Fprintf(os.Stderr, "WARNING: skipped %s\n", warning.Message)
+	}
 	fmt.Printf("migrated v1 %s -> v2 %s; source was not modified\n", cfg.DB, cfg.Out)
+	if len(warnings) > 0 {
+		fmt.Fprintln(os.Stderr, "\nRequired actions:")
+		for _, warning := range warnings {
+			fmt.Fprintf(os.Stderr, "- %s\n", warning.Action)
+		}
+	}
 }
 
 func runExportCmd(args []string) {
