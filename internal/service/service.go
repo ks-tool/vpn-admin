@@ -52,12 +52,6 @@ func WithVersion(v string) Option {
 	}
 }
 
-func withGeocoder(geocoder locationGeocoder) Option {
-	return func(h *Service) {
-		h.geocoder = geocoder
-	}
-}
-
 type Service struct {
 	store            storage.Storage
 	tunnels          *sshclient.Manager

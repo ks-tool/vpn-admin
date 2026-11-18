@@ -177,28 +177,12 @@ func serverID(r bunrouter.Request) (string, error) {
 	return sID, nil
 }
 
-func ifaceID(r bunrouter.Request) (string, error) {
-	iID := r.Param("ifaceID")
-	if len(iID) == 0 {
-		return "", errors.New("ifaceID required")
-	}
-	return iID, nil
-}
-
 func userID(r bunrouter.Request) (string, error) {
 	uID := r.Param("userID")
 	if len(uID) == 0 {
 		return "", errors.New("userID required")
 	}
 	return uID, nil
-}
-
-func pubKey(r bunrouter.Request) (string, error) {
-	pubkey := r.Param("pubkey")
-	if len(pubkey) == 0 {
-		return "", errors.New("pubkey required")
-	}
-	return pubkey, nil
 }
 
 func handleErr(err error, fields map[string]any) error {

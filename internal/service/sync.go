@@ -17,12 +17,10 @@
 package service
 
 import (
-	"errors"
 	"fmt"
 	"uuid"
 
 	"github.com/ks-tool/vpn-admin/models"
-	"github.com/ks-tool/vpn-admin/storage"
 	"github.com/rs/zerolog/log"
 )
 
@@ -126,21 +124,4 @@ func (s *Service) syncTunnelledServers(servers []models.Server, tunnelErrs map[u
 			log.Warn().Err(err).Str("server_id", server.ID.String()).Msg("failed to sync server after opening tunnel")
 		}
 	}
-}
-
-func (s *Service) findServerByResource(resourceID string) (*models.Server, error) {
-	servers, err := s.store.Servers().List()
-	if err != nil {
-		return nil, err
-	}
-	for index := range servers {
-		_, err := s.store.Resources(servers[index].ID).Get(resourceID)
-		if err == nil {
-			return &servers[index], nil
-		}
-		if !storage.IsNotFound(err) {
-			return nil, err
-		}
-	}
-	return nil, errors.New("no server owns this resource")
 }
